@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. The planned application uses MySQL as the authoritative store for batches, reservations, and orders, and PostgreSQL with pgvector as a rebuildable search index. A separate Node.js worker will keep the search index in sync.
 
-This initial setup includes a Next.js starter page and local database configuration. Database schemas, application workflows, semantic search, and the indexing worker are planned.
+The current setup includes a Next.js starter page, local database configuration, and the MySQL schema and demo seed. The PostgreSQL search schema, application workflows, semantic search, and indexing worker are planned.
 
 ## Run the web app
 
@@ -28,6 +28,24 @@ To inspect database startup output, run `docker compose logs mysql postgres`.
 
 MySQL listens on `127.0.0.1:3306` and PostgreSQL on `127.0.0.1:5432` by default. PostgreSQL enables the `vector` extension in the search database when it first initializes its volume. Use `docker compose down` to stop both services and keep their data.
 
+### Initialize MySQL
+
+On a fresh volume, MySQL runs the files in `db/mysql/migrations/` in filename order. The seed adds three demo organizations and four catalog materials for the exchange demo.
+
+For an existing MySQL volume, run `docker compose up -d mysql` to pick up the migration mount. Connect with the user, database, and password from `.env`. The command below uses the example user and database and prompts for the password.
+
+```sh
+docker compose exec mysql mysql -u exchange -p byproduct_exchange
+```
+
+At the `mysql>` prompt, run the initial schema and seed in this order. Both files can be reapplied to the initialized database and preserve existing rows.
+
+```sql
+source /docker-entrypoint-initdb.d/001_initial_schema.sql
+source /docker-entrypoint-initdb.d/002_demo_seed.sql
+SHOW TABLES;
+```
+
 ## Repository layout
 
 | Path | Purpose |
@@ -37,7 +55,7 @@ MySQL listens on `127.0.0.1:3306` and PostgreSQL on `127.0.0.1:5432` by default.
 | `src/components/` | Shared UI components |
 | `src/server/` | Future server-side services and database access |
 | `public/` | Public static assets |
-| `db/mysql/migrations/` | Future migrations for the operational database |
+| `db/mysql/migrations/` | MySQL schema and demo seed |
 | `db/postgres/` | pgvector initialization and future search migrations |
 | `worker/` | Future Node.js indexing worker |
 

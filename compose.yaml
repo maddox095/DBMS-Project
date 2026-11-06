@@ -1,6 +1,7 @@
 services:
   mysql:
     image: mysql:8.4.11
+    command: ["--default-time-zone=+00:00"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE in .env}
@@ -10,6 +11,7 @@ services:
       - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./db/mysql/migrations:/docker-entrypoint-initdb.d:ro
 
   postgres:
     image: pgvector/pgvector:0.8.7-pg17
