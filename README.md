@@ -24,6 +24,8 @@ docker compose up -d
 docker compose ps
 ```
 
+To inspect database startup output, run `docker compose logs mysql postgres`.
+
 MySQL listens on `127.0.0.1:3306` and PostgreSQL on `127.0.0.1:5432` by default. PostgreSQL enables the `vector` extension in the search database when it first initializes its volume. Use `docker compose down` to stop both services and keep their data.
 
 ## Repository layout
