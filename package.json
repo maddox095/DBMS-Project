@@ -10,11 +10,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "biome check",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "worker": "node --env-file-if-exists=.env worker/index.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.2",
     "mysql2": "3.24.6",
     "next": "16.4.5",
+    "pg": "8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

@@ -1,8 +1,8 @@
 # Industrial Byproduct Exchange and Material Traceability
 
-A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. The planned application uses MySQL as the authoritative store for batches, reservations, and orders, and PostgreSQL with pgvector as a rebuildable search index. A separate Node.js worker will keep the search index in sync.
+A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. MySQL is the authoritative store for batches, reservations, and orders. A Node.js worker copies batch snapshots to a rebuildable PostgreSQL search index.
 
-The current setup includes a Next.js starter page, the MySQL schema and demo seed, the PostgreSQL search schema, and APIs for the material catalog and batch management. Reservations, orders, semantic search, and the indexing worker are planned.
+The current setup includes a Next.js starter page, the MySQL schema and demo seed, the PostgreSQL search schema, the indexing worker, and APIs for the material catalog and batch management. Reservations, orders, and the semantic search API are planned.
 
 ## Run the web app
 
@@ -88,6 +88,20 @@ Invoke-RestMethod "$api/batches/$($batch.batchId)" -WebSession $demo
 
 `GET /api/batches` lists open batches and supports `materialId`, `afterId`, and `limit`. The supplier can edit or close a batch with `PATCH /api/batches/{batchId}`. Publish and edit commit the batch and its search event together. [Data model and API contract](docs/data-model-and-interfaces.md)
 
+## Run the indexing worker
+
+Initialize both databases and run `npm run worker` in a separate terminal. The worker reads the MySQL and PostgreSQL connection settings from `.env`. The first event downloads the pinned MiniLM model, and subsequent events reuse the local cache.
+
+Publish a batch through the API, then query `batch_search` in PostgreSQL to see the indexed revision and its 384-dimensional vector.
+
+```sql
+SELECT batch_id, revision, available_quantity, vector_dims(embedding)
+FROM batch_search
+ORDER BY batch_id;
+```
+
+The worker marks an event processed after PostgreSQL commits it. Equal or older revisions leave the stored snapshot in place. Failed events stay pending in MySQL and retry with a delay of up to five minutes.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -99,7 +113,7 @@ Invoke-RestMethod "$api/batches/$($batch.batchId)" -WebSession $demo
 | `public/` | Public static assets |
 | `db/mysql/migrations/` | MySQL schema and demo seed |
 | `db/postgres/` | pgvector initialization, search schema, and smoke test |
-| `worker/` | Future Node.js indexing worker |
+| `worker/` | Node.js outbox consumer and search projection writes |
 
 ## Checks
 
