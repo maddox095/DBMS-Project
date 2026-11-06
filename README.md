@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. MySQL is the authoritative store for batches, reservations, and orders. A Node.js worker copies batch snapshots to a rebuildable PostgreSQL search index.
 
-The current setup includes a Next.js starter page, the database schemas, the indexing worker, and APIs for semantic search and exchanges. The discovery and exchange screens are planned.
+The current setup includes material discovery and batch detail screens, the database schemas, the indexing worker, and APIs for semantic search and exchanges.
 
 ## Run the web app
 
@@ -13,7 +13,7 @@ npm ci
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The starter page works without database services or environment variables.
+Open [http://localhost:3000](http://localhost:3000). With both databases and the indexing worker running, choose a demo organization, search by material or use, and open a batch to see its current availability.
 
 ## Start the local databases
 
@@ -138,7 +138,7 @@ Search ranks open batches with available stock by cosine similarity. Use `catego
 | --- | --- |
 | `src/app/` | Next.js App Router pages, layouts, and styles |
 | `src/app/api/` | Demo session, catalog, exchange, and search routes |
-| `src/components/` | Shared UI components |
+| `src/components/` | Discovery, batch details, and shared demo session controls |
 | `src/server/` | Server-side services and database access |
 | `public/` | Public static assets |
 | `db/mysql/migrations/` | MySQL schema and demo seed |
