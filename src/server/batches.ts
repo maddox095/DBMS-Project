@@ -1,7 +1,13 @@
 import type { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
 import { ApiError, invalidInput, readObject } from "./http";
 import { hasMysqlError, mysqlPool, mysqlTransaction } from "./mysql";
-import { quantityUnits, readId, readQuantity, readText } from "./validation";
+import {
+  quantityUnits,
+  readId,
+  readLimit,
+  readQuantity,
+  readText,
+} from "./validation";
 
 type BatchStatus = "OPEN" | "CLOSED";
 
@@ -69,11 +75,7 @@ export async function getBatch(
 }
 
 export async function listBatches(params: URLSearchParams) {
-  const rawLimit = params.get("limit") ?? "20";
-  const limit = Number(rawLimit);
-  if (!/^[1-9][0-9]?$/.test(rawLimit) || limit > 50) {
-    throw invalidInput("limit must be an integer from 1 to 50.");
-  }
+  const limit = readLimit(params.get("limit"));
   const conditions = ["b.status = 'OPEN'"];
   const values: string[] = [];
   const materialId = params.get("materialId");

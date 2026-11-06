@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. MySQL is the authoritative store for batches, reservations, and orders. A Node.js worker copies batch snapshots to a rebuildable PostgreSQL search index.
 
-The current setup includes a Next.js starter page, the database schemas, the indexing worker, and APIs for the catalog, batches, reservations, and orders. The semantic search API and exchange screens are planned.
+The current setup includes a Next.js starter page, the database schemas, the indexing worker, and APIs for semantic search and exchanges. The discovery and exchange screens are planned.
 
 ## Run the web app
 
@@ -113,12 +113,22 @@ ORDER BY batch_id;
 
 The worker marks an event processed after PostgreSQL commits it. Equal or older revisions leave the stored snapshot in place. Failed events stay pending in MySQL and retry with a delay of up to five minutes.
 
+## Try semantic search
+
+Once the worker indexes a batch, search with a demo session. The query accepts up to 500 characters.
+
+```powershell
+Invoke-RestMethod "$api/search?q=cement%20blending&limit=5" -WebSession $demo
+```
+
+Search ranks open batches with available stock by cosine similarity. Use `category` or `materialId` to filter the results. Use `materialId` together with `minAvailableQuantity` to compare quantities in the same unit. Batch details and reservations check current availability in MySQL.
+
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/app/` | Next.js App Router pages, layouts, and styles |
-| `src/app/api/` | Demo session, material catalog, and batch routes |
+| `src/app/api/` | Demo session, catalog, exchange, and search routes |
 | `src/components/` | Shared UI components |
 | `src/server/` | Server-side services and database access |
 | `public/` | Public static assets |

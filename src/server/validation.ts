@@ -44,3 +44,12 @@ export function readText(value: unknown, field: string, maxLength: number) {
   }
   return text;
 }
+
+export function readLimit(value: string | null) {
+  const raw = value ?? "20";
+  const limit = Number(raw);
+  if (!/^[1-9][0-9]?$/.test(raw) || limit > 50) {
+    throw invalidInput("limit must be an integer from 1 to 50.");
+  }
+  return limit;
+}

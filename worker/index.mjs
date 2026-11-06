@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { createPool } from "mysql2/promise";
-import pg from "pg";
+import { postgresPool } from "../src/server/postgres.mjs";
 import { processIndexEvents } from "./indexing.mjs";
 
 function required(name) {
@@ -19,17 +19,7 @@ const mysql = createPool({
   supportBigNumbers: true,
   bigNumberStrings: true,
 });
-const postgres = new pg.Pool({
-  host: "127.0.0.1",
-  port: Number(process.env.POSTGRES_PORT ?? 5432),
-  database: required("POSTGRES_DB"),
-  user: required("POSTGRES_USER"),
-  password: required("POSTGRES_PASSWORD"),
-  connectionTimeoutMillis: 5000,
-});
-postgres.on("error", (error) =>
-  console.error("PostgreSQL connection lost:", error.message),
-);
+const postgres = postgresPool();
 
 const stop = new AbortController();
 process.once("SIGINT", () => stop.abort());
