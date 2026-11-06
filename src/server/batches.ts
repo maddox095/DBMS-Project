@@ -42,8 +42,18 @@ function batchFromRow(row: BatchRow) {
 
 type Batch = ReturnType<typeof batchFromRow>;
 
-function batchNotFound() {
+export function batchNotFound() {
   return new ApiError(404, "BATCH_NOT_FOUND", "Batch not found.");
+}
+
+export async function lockBatch(connection: PoolConnection, id: string) {
+  const [rows] = await connection.execute<
+    (RowDataPacket & { supplierOrgId: string })[]
+  >(
+    "SELECT supplier_org_id AS supplierOrgId FROM batches WHERE id = CAST(? AS SIGNED) FOR UPDATE",
+    [id],
+  );
+  return rows[0]?.supplierOrgId;
 }
 
 export async function getBatch(
@@ -195,14 +205,9 @@ export async function editBatch(
   }
 
   return mysqlTransaction(async (connection) => {
-    const [locked] = await connection.execute<
-      (RowDataPacket & { supplierOrgId: string })[]
-    >(
-      "SELECT supplier_org_id AS supplierOrgId FROM batches WHERE id = CAST(? AS SIGNED) FOR UPDATE",
-      [id],
-    );
-    if (!locked[0]) throw batchNotFound();
-    if (locked[0].supplierOrgId !== supplierOrgId) {
+    const owner = await lockBatch(connection, id);
+    if (!owner) throw batchNotFound();
+    if (owner !== supplierOrgId) {
       throw new ApiError(
         403,
         "BATCH_FORBIDDEN",

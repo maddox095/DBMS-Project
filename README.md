@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. MySQL is the authoritative store for batches, reservations, and orders. A Node.js worker copies batch snapshots to a rebuildable PostgreSQL search index.
 
-The current setup includes a Next.js starter page, the MySQL schema and demo seed, the PostgreSQL search schema, the indexing worker, and APIs for the material catalog and batch management. Reservations, orders, and the semantic search API are planned.
+The current setup includes a Next.js starter page, the database schemas, the indexing worker, and APIs for the catalog, batches, reservations, and orders. The semantic search API and exchange screens are planned.
 
 ## Run the web app
 
@@ -87,6 +87,17 @@ Invoke-RestMethod "$api/batches/$($batch.batchId)" -WebSession $demo
 ```
 
 `GET /api/batches` lists open batches and supports `materialId`, `afterId`, and `limit`. The supplier can edit or close a batch with `PATCH /api/batches/{batchId}`. Publish and edit commit the batch and its search event together. [Data model and API contract](docs/data-model-and-interfaces.md)
+
+To reserve the batch and place an order, select a different organization in a separate demo session. Keep the same idempotency key when retrying the reservation request.
+
+```powershell
+Invoke-RestMethod "$api/demo-session" -Method Post -ContentType "application/json" -Body '{"organizationId":"2"}' -SessionVariable recipient
+$requestKey = [guid]::NewGuid().ToString()
+$reservation = Invoke-RestMethod "$api/batches/$($batch.batchId)/reservations" -Method Post -ContentType "application/json" -Body '{"quantity":"15.000"}' -Headers @{"Idempotency-Key" = $requestKey} -WebSession $recipient
+Invoke-RestMethod "$api/reservations/$($reservation.reservationId)/order" -Method Post -WebSession $recipient
+```
+
+Use `POST /api/reservations/{reservationId}/cancel` to release an active hold. Reservations and cancellations update available quantity and enqueue a search snapshot in the same transaction. Placing the order converts the hold once and preserves the available quantity.
 
 ## Run the indexing worker
 
