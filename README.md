@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. The planned application uses MySQL as the authoritative store for batches, reservations, and orders, and PostgreSQL with pgvector as a rebuildable search index. A separate Node.js worker will keep the search index in sync.
 
-The current setup includes a Next.js starter page, the MySQL schema and demo seed, and the PostgreSQL search schema. Application workflows, semantic search, and the indexing worker are planned.
+The current setup includes a Next.js starter page, the MySQL schema and demo seed, the PostgreSQL search schema, and APIs for the material catalog and batch management. Reservations, orders, semantic search, and the indexing worker are planned.
 
 ## Run the web app
 
@@ -66,14 +66,36 @@ Get-Content -Raw db/postgres/tests/search_schema.sql | docker compose exec -T po
 docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U exchange_search -d byproduct_search < db/postgres/tests/search_schema.sql
 ```
 
+## Try the batch APIs
+
+Initialize MySQL and set `DEMO_SESSION_SECRET` in `.env` before starting Next.js. The local demo lets you select a seeded organization. `GET /api/demo-session` lists the available organizations, and `POST /api/demo-session` sets the session cookie. The catalog and batch endpoints use that cookie.
+
+```powershell
+$api = "http://localhost:3000/api"
+Invoke-RestMethod "$api/demo-session" -Method Post -ContentType "application/json" -Body '{"organizationId":"1"}' -SessionVariable demo
+$materials = Invoke-RestMethod "$api/materials" -WebSession $demo
+$material = $materials.items | Where-Object name -eq "Fly ash"
+$body = @{
+    materialId = $material.id
+    batchCode = "DEMO-001"
+    description = "Dry fly ash for cement blending."
+    location = "Bengaluru"
+    totalQuantity = "100.000"
+} | ConvertTo-Json
+$batch = Invoke-RestMethod "$api/batches" -Method Post -ContentType "application/json" -Body $body -WebSession $demo
+Invoke-RestMethod "$api/batches/$($batch.batchId)" -WebSession $demo
+```
+
+`GET /api/batches` lists open batches and supports `materialId`, `afterId`, and `limit`. The supplier can edit or close a batch with `PATCH /api/batches/{batchId}`. Publish and edit commit the batch and its search event together. [Data model and API contract](docs/data-model-and-interfaces.md)
+
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/app/` | Next.js App Router pages, layouts, and styles |
-| `src/app/api/` | Future HTTP route handlers |
+| `src/app/api/` | Demo session, material catalog, and batch routes |
 | `src/components/` | Shared UI components |
-| `src/server/` | Future server-side services and database access |
+| `src/server/` | Server-side services and database access |
 | `public/` | Public static assets |
 | `db/mysql/migrations/` | MySQL schema and demo seed |
 | `db/postgres/` | pgvector initialization, search schema, and smoke test |
