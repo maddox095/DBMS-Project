@@ -2,7 +2,7 @@
 
 A DBMS course project for finding surplus industrial materials and tracing exchanges from source batches to recipients. The planned application uses MySQL as the authoritative store for batches, reservations, and orders, and PostgreSQL with pgvector as a rebuildable search index. A separate Node.js worker will keep the search index in sync.
 
-The current setup includes a Next.js starter page, local database configuration, and the MySQL schema and demo seed. The PostgreSQL search schema, application workflows, semantic search, and indexing worker are planned.
+The current setup includes a Next.js starter page, the MySQL schema and demo seed, and the PostgreSQL search schema. Application workflows, semantic search, and the indexing worker are planned.
 
 ## Run the web app
 
@@ -26,7 +26,7 @@ docker compose ps
 
 To inspect database startup output, run `docker compose logs mysql postgres`.
 
-MySQL listens on `127.0.0.1:3306` and PostgreSQL on `127.0.0.1:5432` by default. PostgreSQL enables the `vector` extension in the search database when it first initializes its volume. Use `docker compose down` to stop both services and keep their data.
+MySQL listens on `127.0.0.1:3306` and PostgreSQL on `127.0.0.1:5432` by default. Use `docker compose down` to stop both services and keep their data.
 
 ### Initialize MySQL
 
@@ -46,6 +46,26 @@ source /docker-entrypoint-initdb.d/002_demo_seed.sql
 SHOW TABLES;
 ```
 
+### Initialize PostgreSQL search
+
+On a fresh volume, PostgreSQL enables the `vector` extension and creates `batch_search`. For an existing volume, recreate the service with `docker compose up -d postgres` to pick up the migration mount, then apply the SQL files. The command uses the example database user and name from `.env`. Both files can be reapplied with existing search rows in place.
+
+```sh
+docker compose exec postgres psql -X -v ON_ERROR_STOP=1 -U exchange_search -d byproduct_search -f /docker-entrypoint-initdb.d/01-vector.sql -f /docker-entrypoint-initdb.d/02-batch-search.sql
+```
+
+The `batch_id` primary key keeps one snapshot per MySQL batch and supports versioned upserts. The partial B-tree indexes on `material_id` and `category` help filter rows with `status = 'OPEN' AND available_quantity > 0` before exact cosine ranking. The worker will set `indexed_at` when it replaces a snapshot.
+
+Run the smoke test to check cosine scores, tie-breaking by batch ID, and exclusion of closed or depleted batches. The test uses temporary fixtures.
+
+```powershell
+Get-Content -Raw db/postgres/tests/search_schema.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U exchange_search -d byproduct_search
+```
+
+```sh
+docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U exchange_search -d byproduct_search < db/postgres/tests/search_schema.sql
+```
+
 ## Repository layout
 
 | Path | Purpose |
@@ -56,7 +76,7 @@ SHOW TABLES;
 | `src/server/` | Future server-side services and database access |
 | `public/` | Public static assets |
 | `db/mysql/migrations/` | MySQL schema and demo seed |
-| `db/postgres/` | pgvector initialization and future search migrations |
+| `db/postgres/` | pgvector initialization, search schema, and smoke test |
 | `worker/` | Future Node.js indexing worker |
 
 ## Checks
