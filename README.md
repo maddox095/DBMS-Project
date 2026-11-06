@@ -99,6 +99,15 @@ Invoke-RestMethod "$api/reservations/$($reservation.reservationId)/order" -Metho
 
 Use `POST /api/reservations/{reservationId}/cancel` to release an active hold. Reservations and cancellations update available quantity and enqueue a search snapshot in the same transaction. Placing the order converts the hold once and preserves the available quantity.
 
+After the exchange, retrieve the batch trace with the supplier session or a recipient session.
+
+```powershell
+Invoke-RestMethod "$api/batches/$($batch.batchId)/trace" -WebSession $demo
+Invoke-RestMethod "$api/batches/$($batch.batchId)/trace" -WebSession $recipient
+```
+
+The trace includes the source, distinct recipients, reservation quantities and states, and completed orders. The supplier sees all exchanges for the batch. Each recipient sees its own records.
+
 ## Run the indexing worker
 
 Initialize both databases and run `npm run worker` in a separate terminal. The worker reads the MySQL and PostgreSQL connection settings from `.env`. The first event downloads the pinned MiniLM model, and subsequent events reuse the local cache.

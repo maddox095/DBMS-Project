@@ -25,10 +25,15 @@ export function mysqlPool() {
 
 export async function mysqlTransaction<T>(
   work: (connection: PoolConnection) => Promise<T>,
+  mode: "write" | "snapshot" = "write",
 ): Promise<T> {
   const connection = await mysqlPool().getConnection();
   try {
-    await connection.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+    await connection.query(
+      mode === "snapshot"
+        ? "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+        : "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+    );
     await connection.beginTransaction();
     const result = await work(connection);
     await connection.commit();

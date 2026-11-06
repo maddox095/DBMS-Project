@@ -11,7 +11,7 @@ import { quantityUnits } from "./validation";
 
 type ReservationStatus = "ACTIVE" | "CANCELLED" | "CONVERTED";
 
-interface ReservationRow extends RowDataPacket {
+export interface ReservationRow extends RowDataPacket {
   reservationId: string;
   batchId: string;
   recipientOrgId: string;
@@ -33,9 +33,13 @@ const reservationSelect = `
   FROM reservations
 `;
 
-function serializeReservation(row: ReservationRow) {
+export function serializeReservation(row: ReservationRow) {
   return {
-    ...row,
+    reservationId: row.reservationId,
+    batchId: row.batchId,
+    recipientOrgId: row.recipientOrgId,
+    quantity: row.quantity,
+    status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
