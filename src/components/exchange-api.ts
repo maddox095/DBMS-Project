@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
+import type { Fulfillment } from "@/types/order";
+
+export type { Fulfillment } from "@/types/order";
+
+import { useCallback, useEffect, useState } from "react";
 
 export interface Organization {
   id: string;
   name: string;
+  role?: "CONSUMER" | "PRODUCER";
 }
 
 export interface Material {
@@ -32,6 +37,16 @@ export interface SearchResult extends BatchSnapshot {
   score: number;
 }
 
+export interface SearchResponse {
+  items: SearchResult[];
+  stats: {
+    searchedCount: number;
+    matchedCount: number;
+    elapsedMs: number;
+    minSimilarity: number;
+  };
+}
+
 export interface Reservation {
   reservationId: string;
   batchId: string;
@@ -46,6 +61,7 @@ export interface Order {
   orderId: string;
   reservationId: string;
   placedAt: string;
+  fulfillment: Fulfillment | null;
 }
 
 export interface Trace {
@@ -94,10 +110,14 @@ export function positiveQuantity(value: string) {
 export function jsonOptions(
   method: "POST" | "PATCH",
   body: unknown,
+  organizationId?: string,
 ): RequestInit {
   return {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(organizationId ? { "X-Organization-Id": organizationId } : {}),
+    },
     body: JSON.stringify(body),
   };
 }
@@ -117,9 +137,12 @@ export function useApiData<T>(
   identity: string | null = null,
 ) {
   const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const scopeKey = `${identity ?? ""}:${path ?? ""}`;
   const requestKey = `${identity ?? ""}:${attempt}:${path ?? ""}`;
   const [result, setResult] = useState<{
     requestKey: string;
+    scopeKey: string;
     data?: T;
     error?: string;
     errorStatus?: number;
@@ -130,12 +153,14 @@ export function useApiData<T>(
     const controller = new AbortController();
     apiRequest<T>(path, { signal: controller.signal }).then(
       (data) => {
-        if (!controller.signal.aborted) setResult({ requestKey, data });
+        if (!controller.signal.aborted)
+          setResult({ requestKey, scopeKey, data });
       },
       (error) => {
         if (!controller.signal.aborted)
           setResult({
             requestKey,
+            scopeKey,
             error: errorMessage(error),
             errorStatus:
               error instanceof RequestError ? error.status : undefined,
@@ -143,15 +168,17 @@ export function useApiData<T>(
       },
     );
     return () => controller.abort();
-  }, [path, requestKey]);
+  }, [path, requestKey, scopeKey]);
 
   const current =
     path && result?.requestKey === requestKey ? result : undefined;
   return {
-    data: current?.data,
+    data:
+      current?.data ??
+      (path && result?.scopeKey === scopeKey ? result.data : undefined),
     error: current?.error,
     errorStatus: current?.errorStatus,
     loading: path !== null && current === undefined,
-    retry: () => setAttempt((value) => value + 1),
+    retry,
   };
 }
