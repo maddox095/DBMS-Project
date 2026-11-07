@@ -13,16 +13,18 @@ erDiagram
     BATCH ||..o{ RESERVATION : receives
     ORGANIZATION ||..o{ RESERVATION : requests
     RESERVATION ||..o| EXCHANGE_ORDER : becomes
+    EXCHANGE_ORDER ||..o| ORDER_FULFILLMENT : details
     BATCH ||..o{ BATCH_INDEX_EVENT : produces
 ```
 
 | Table | Columns and constraints |
 | --- | --- |
-| `organizations` | `id` PK, `name`. An organization can supply and receive batches. |
+| `organizations` | `id` PK, `name`, `role` (`CONSUMER` or `PRODUCER`, migration 004). Producers supply batches; consumers reserve and order. |
 | `materials` | `id` PK, `name`, `category`, `unit`. Seed a shared catalog with unique `(category, name)` and one canonical unit per material, such as `kg` or `L`. |
 | `batches` | `id` PK, `supplier_org_id` FK, `material_id` FK, `batch_code`, `description`, `location`, `total_quantity`, `status`, `revision`, `created_at`, `updated_at`. Unique `(supplier_org_id, batch_code)`. Status is `OPEN` or `CLOSED`. Revision starts at 1. |
 | `reservations` | `id` PK, `batch_id` FK, `recipient_org_id` FK, `request_key`, `quantity`, `status`, `created_at`, `updated_at`. Unique `(recipient_org_id, request_key)`. Index `(batch_id, status)` for availability and trace queries. |
 | `exchange_orders` | `id` PK, `reservation_id` unique FK, `placed_at`. Batch, recipient, and quantity come from the reservation. |
+| `order_fulfillments` | `order_id` PK/FK, contact, email, phone, company, delivery address and method, requested date, tax ID and notes; quotation status, INR amounts, validity, terms and timestamps. Added by migration 003. Earlier orders can have no fulfillment row. |
 | `batch_index_events` | `id` PK, `batch_id` FK, `batch_revision`, `payload` JSON, `created_at`, `next_attempt_at`, `attempts`, nullable `processed_at`. Unique `(batch_id, batch_revision)`. Index `(processed_at, next_attempt_at, id)` for polling. |
 
 Use positive signed `BIGINT` IDs and revisions so both databases share the same range. Serialize them as decimal strings at JSON boundaries. Store quantities as `DECIMAL(14,3)` and transmit them as strings with three fractional digits, such as `"120.000"`. Require positive totals and reservation quantities. Store timestamps in UTC and return ISO 8601 UTC strings.
@@ -41,7 +43,7 @@ availableQuantity = totalQuantity - SUM(quantity of ACTIVE or CONVERTED reservat
 | Edit or close | Only the supplier can change description, location, or total. The total must cover existing held and ordered quantities. `OPEN → CLOSED` stops new reservations. Existing holds can still be cancelled or converted. |
 | Reserve | A recipient other than the supplier can reserve an `OPEN` batch if the requested quantity fits. Create an `ACTIVE` reservation. |
 | Cancel | The recipient changes `ACTIVE → CANCELLED`, releasing the quantity. Cancellation of an already cancelled reservation returns its current state. |
-| Place order | The recipient changes `ACTIVE → CONVERTED` and creates the order in the same transaction. Availability stays the same because the hold becomes a completed exchange. Repeating the action returns the existing order. |
+| Place order | The recipient changes `ACTIVE → CONVERTED` and creates the order in the same transaction. Availability stays the same because the quantity remains committed. Delivery details are saved atomically as `QUOTE_REQUESTED`; the supplier issues a `QUOTED` price and the recipient accepts it as `CONFIRMED`. Confirmation of an expired quote is rejected. Quotation issue and confirmation take the same batch lock. Repeating the action returns the existing order. |
 
 Run mutations in an InnoDB transaction at `READ COMMITTED`. On an existing batch, lock its row by ID with `SELECT ... FOR UPDATE` before reading availability or modifying reservations. If the route starts from a reservation ID, resolve its immutable batch ID first and recheck ownership and reservation state after locking the batch. All writers follow this lock order. The batch lock serializes quantity checks, including concurrent requests from different recipients. [MySQL locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) · [Transaction isolation levels](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html)
 
@@ -49,10 +51,11 @@ Example with a `100.000 kg` batch. Reserving `60.000 kg` leaves `40.000 kg`. Con
 
 ## HTTP interfaces
 
-Use JSON. The local demo resolves the acting organization from a server-side demo session. Catalog, batch detail, and search are readable by demo organizations. Writes enforce the supplier or recipient rules above. A supplier sees its batch's full trace. A recipient sees its own reservations and orders for that batch. The trace includes the supplier and the distinct recipient organizations visible to the caller.
+Use JSON. The local demo resolves the acting organization from a server-side demo session. Catalog is shared. Search/reservations/orders require a Consumer role; publishing/editing/quoting require a Producer role, checked against MySQL on every request. Producer batch lists/details are scoped to owned inventory. Business writes require `X-Organization-Id` matching the signed session, otherwise `409 ACCOUNT_CHANGED`. Writes also enforce the batch supplier and reservation recipient ownership rules above. A supplier sees its batch's full trace. A recipient sees its own reservations and orders for that batch. The trace includes the supplier and the distinct recipient organizations visible to the caller.
 
 | Endpoint | Request | Success |
 | --- | --- | --- |
+| `GET /api/orders` | Active account; no caller-supplied owner filter | Own recipient activity for consumers; own supplied-batch activity for producers |
 | `GET /api/materials` | Optional `category` | `200 { items: Material[] }` |
 | `GET /api/batches` | Optional `materialId`, `afterId`, `limit`. Lists open batches in ascending ID order. | `200 { items: Batch[], nextAfterId: Id or null }` |
 | `POST /api/batches` | `{ materialId, batchCode, description, location, totalQuantity }` | `201 Batch` |
@@ -60,9 +63,11 @@ Use JSON. The local demo resolves the acting organization from a server-side dem
 | `PATCH /api/batches/{batchId}` | One or more of `description`, `location`, `totalQuantity`, `status` | `200 Batch` |
 | `POST /api/batches/{batchId}/reservations` | `{ quantity }` and a UUID in the `Idempotency-Key` header | `201 Reservation`, or `200` for an identical retry |
 | `POST /api/reservations/{reservationId}/cancel` | Empty body | `200 Reservation` |
-| `POST /api/reservations/{reservationId}/order` | Empty body | `201 Order`, or `200` for an existing order |
+| `POST /api/reservations/{reservationId}/order` | Required contact, company, email, phone, addressLine, city, region, postalCode, country, deliveryMethod; optional requestedDate, taxId, notes. See README example. | `201 Order`, or `200` for an existing order |
+| `POST /api/orders/{orderId}/quotation` | Supplier only: `{ unitPrice, freight, taxPercent, validUntil, terms }` | `200 Fulfillment` |
+| `POST /api/orders/{orderId}/confirm` | Recipient only, empty body | `200 Fulfillment`, repeatable after confirmation |
 | `GET /api/batches/{batchId}/trace` | Batch ID | `200 Trace` |
-| `GET /api/search` | Required `q`. Optional `materialId`, `category`, `minAvailableQuantity`, `limit`. Minimum quantity requires `materialId` to fix the unit. | `200 { items: SearchResult[] }` from PostgreSQL |
+| `GET /api/search` | Required `q`. Optional `materialId`, `category`, `minAvailableQuantity`, `minSimilarity` (0–1), `limit`. Minimum quantity requires `materialId` to fix the unit. | `200 { items: SearchResult[], stats: { searchedCount, matchedCount, elapsedMs, minSimilarity } }` from PostgreSQL |
 
 ```ts
 type Id = string;
@@ -101,6 +106,7 @@ type Order = {
   orderId: Id;
   reservationId: Id;
   placedAt: Timestamp;
+  fulfillment: import("../src/types/order").Fulfillment | null;
 };
 
 type Trace = {
@@ -163,7 +169,17 @@ Apply the selected filters to rows where status is `OPEN` and availability is po
 
 ## Review decisions
 
-- Confirm the seeded material categories and units, and the scope of the local demo organization picker.
+- Confirm the seeded material categories and units, and the scope of the local account selector.
 - Confirm one batch per reservation and one full conversion per reservation. Order placement represents completion for the course demo.
 - Confirm the batch detail route, JSON contract, and the source and recipient visibility rules.
 - Confirm the embedding model against a few representative material queries and agree on the shared runtime settings.
+
+### Delivery and quotation snapshots
+
+Contact details are visible only in the existing supplier/recipient trace scope. The account page remains a local session selector, not production identity verification; deployment requires real authentication and organization membership checks before collecting real customer data. The interface removes rehearsal wording without changing that access model.
+
+New requests require a validated delivery/contact snapshot. Order creation and reservation conversion commit together. Supplier quotations are issued once and preserve exact amounts and terms. Monetary strings accept at most two decimals; totals use integer arithmetic with half-up rounding. Validity dates are UTC calendar dates. Quotes cannot be edited after issue, and dispatch/payment are coordinated outside the app. An expired quotation cannot be accepted.
+
+### Separate workspaces
+
+The root route resolves to consumer discovery or producer inventory according to the stored role. `/producer` and `/producer/orders` expose only producer tools; `/orders` exposes consumer activity. Producer batch management uses `/producer/batches/{id}`. Direct visits to the wrong workspace render a role gate without forms. Accounts can be changed only on `/account`, with the active role/name visible in navigation. Account changes broadcast to other tabs, and business mutation headers prevent an old view from acting as the newly selected organization.

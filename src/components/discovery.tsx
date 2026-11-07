@@ -2,22 +2,29 @@
 
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { OrganizationPicker, useDemoSession } from "./demo-session";
 import {
   apiQuantity,
   apiRequest,
   errorMessage,
   type Material,
+  type SearchResponse,
   type SearchResult,
   useApiData,
 } from "./exchange-api";
+import { useOrganizationSession } from "./organization-session";
 
 type SearchState =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; items: SearchResult[] };
+  | ({ kind: "ready" } & SearchResponse);
 
-function ResultCard({ batch }: { batch: SearchResult }) {
+function ResultCard({
+  batch,
+  supplierName,
+}: {
+  batch: SearchResult;
+  supplierName: string;
+}) {
   return (
     <article className="result-card">
       <div className="result-meta">
@@ -25,12 +32,15 @@ function ResultCard({ batch }: { batch: SearchResult }) {
         <span className="batch-code">{batch.batchCode}</span>
       </div>
       <h3>{batch.material.name}</h3>
+      <p className="supplier-name">
+        Supplier · <strong>{supplierName}</strong>
+      </p>
       <p className="result-description">
         {batch.description || "Description pending."}
       </p>
       <dl className="result-facts">
         <div>
-          <dt>Available in search</dt>
+          <dt>Available quantity</dt>
           <dd>
             {batch.availableQuantity} {batch.material.unit}
           </dd>
@@ -41,7 +51,9 @@ function ResultCard({ batch }: { batch: SearchResult }) {
         </div>
       </dl>
       <div className="result-footer">
-        <span className="muted">Similarity {batch.score.toFixed(2)}</span>
+        <span className="match-score">
+          {Math.round(batch.score * 100)}% match
+        </span>
         <Link className="result-link" href={`/batches/${batch.batchId}`}>
           Open batch <span aria-hidden="true">↗</span>
           <span className="sr-only"> {batch.batchCode}</span>
@@ -52,7 +64,7 @@ function ResultCard({ batch }: { batch: SearchResult }) {
 }
 
 export function Discovery() {
-  const session = useDemoSession();
+  const session = useOrganizationSession();
   const catalog = useApiData<{ items: Material[] }>(
     session.organizationId ? "/api/materials" : null,
     session.organizationId,
@@ -61,6 +73,7 @@ export function Discovery() {
   const [category, setCategory] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [minimum, setMinimum] = useState("");
+  const [similarity, setSimilarity] = useState(20);
   const [results, setResults] = useState<SearchState>({ kind: "idle" });
   const controller = useRef<AbortController | null>(null);
   const materials = catalog.data?.items ?? [];
@@ -76,6 +89,12 @@ export function Discovery() {
   const searching = results.kind === "loading";
 
   useEffect(() => () => controller.current?.abort(), []);
+  // A new workspace must never display another organization's in-flight search.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: organization changes intentionally reset the search.
+  useEffect(() => {
+    controller.current?.abort();
+    setResults({ kind: "idle" });
+  }, [session.organizationId]);
 
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -88,7 +107,10 @@ export function Discovery() {
       });
       return;
     }
-    const params = new URLSearchParams({ q: term });
+    const params = new URLSearchParams({
+      q: term,
+      minSimilarity: String(similarity / 100),
+    });
     if (category) params.set("category", category);
     if (materialId) params.set("materialId", materialId);
     if (materialId && minimum.trim()) {
@@ -105,11 +127,11 @@ export function Discovery() {
     controller.current = request;
     setResults({ kind: "loading" });
     try {
-      const { items } = await apiRequest<{ items: SearchResult[] }>(
+      const response = await apiRequest<SearchResponse>(
         `/api/search?${params}`,
         { signal: request.signal },
       );
-      if (!request.signal.aborted) setResults({ kind: "ready", items });
+      if (!request.signal.aborted) setResults({ kind: "ready", ...response });
     } catch (error) {
       if (!request.signal.aborted)
         setResults({ kind: "error", message: errorMessage(error) });
@@ -128,14 +150,17 @@ export function Discovery() {
     <>
       <section className="discovery-hero">
         <div>
-          <p className="eyebrow">Material discovery</p>
-          <h1>Find surplus materials.</h1>
+          <p className="eyebrow">Consumer workspace · Material discovery</p>
+          <h1>
+            Good materials.
+            <br />
+            New possibilities.
+          </h1>
           <p className="hero-copy">
-            Search industrial byproducts by material, process, or intended use.
-            Open a batch to check current stock at the source.
+            Source industrial byproducts for your next process. Find the right
+            match, reserve your quantity, and connect with the supplier.
           </p>
         </div>
-        <OrganizationPicker session={session} />
       </section>
 
       <form
@@ -220,10 +245,28 @@ export function Discovery() {
                   : "Select a material to set a minimum."}
               </p>
             </div>
+            <div className="similarity-filter">
+              <label htmlFor="min-similarity">
+                Minimum similarity <output>{similarity}%</output>
+              </label>
+              <input
+                id="min-similarity"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={similarity}
+                onChange={(event) => setSimilarity(Number(event.target.value))}
+                aria-describedby="similarity-hint"
+              />
+              <p className="field-hint" id="similarity-hint">
+                Higher values narrow the results.
+              </p>
+            </div>
           </div>
         </fieldset>
         {!session.organizationId && !session.loading ? (
-          <p className="field-hint">Choose a demo organization to search.</p>
+          <p className="field-hint">Choose your organization to search.</p>
         ) : null}
         {catalog.loading ? (
           <output className="field-hint">Loading filters…</output>
@@ -250,13 +293,19 @@ export function Discovery() {
       <section className="results" aria-labelledby="results-title">
         <div className="section-heading">
           <h2 id="results-title">Search results</h2>
-          {results.kind === "ready" ? (
-            <output className="result-count">
-              {results.items.length}{" "}
-              {results.items.length === 1 ? "batch" : "batches"}
-            </output>
-          ) : null}
         </div>
+        {results.kind === "ready" ? (
+          <output className="search-stats" aria-live="polite">
+            {results.stats.matchedCount}{" "}
+            {results.stats.matchedCount === 1 ? "result" : "results"} from{" "}
+            {results.stats.searchedCount} eligible batches searched ·{" "}
+            {(results.stats.elapsedMs / 1000).toFixed(3)} seconds ·{" "}
+            {Math.round(results.stats.minSimilarity * 100)}% minimum similarity
+            {results.items.length < results.stats.matchedCount
+              ? ` · Showing the top ${results.items.length}`
+              : ""}
+          </output>
+        ) : null}
         {results.kind === "idle" ? (
           <p className="empty-panel">
             Enter a search term to discover open batches.
@@ -274,7 +323,15 @@ export function Discovery() {
         {results.kind === "ready" && results.items.length > 0 ? (
           <div className="result-grid">
             {results.items.map((batch) => (
-              <ResultCard key={batch.batchId} batch={batch} />
+              <ResultCard
+                key={batch.batchId}
+                batch={batch}
+                supplierName={
+                  session.organizations.find(
+                    (item) => item.id === batch.supplierOrgId,
+                  )?.name ?? `Organization ${batch.supplierOrgId}`
+                }
+              />
             ))}
           </div>
         ) : null}

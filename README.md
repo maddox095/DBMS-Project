@@ -15,9 +15,9 @@ npm ci
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). With both databases and the indexing worker running, choose a demo organization, search by material or use, and open a batch to see its current availability.
+Open [http://localhost:3000](http://localhost:3000). With both databases and the indexing worker running, choose an account at `/account`. Consumers land on material discovery and can reserve and order. Producers land at `/producer`, where they manage only their own inventory and incoming requests.
 
-Use **Publish batch** to add material for the selected organization. On batch details, the supplier can edit the batch, and recipients can reserve a quantity and manage their holds in **Exchange history**. The history shows completed orders and the source organization.
+The producer navigation contains **My inventory**, **Incoming requests**, and **Publish batch**. Consumer navigation contains **Discover materials** and **My reservations & orders**; it never shows publishing tools. Producers cannot reserve/order, and consumers cannot publish/edit stock. Producer detail pages use `/producer/batches/{id}` and consumer detail pages use `/batches/{id}`. Account changes happen on `/account`, not inside a material page. Add contact and delivery details after reserving, request a quotation, and confirm it once the supplier has issued pricing. The supplier sees the delivery request and can prepare its quotation in the same history.
 
 ## Start the local databases
 
@@ -42,11 +42,13 @@ For an existing MySQL volume, run `docker compose up -d mysql` to pick up the mi
 docker compose exec mysql mysql -u exchange -p byproduct_exchange
 ```
 
-At the `mysql>` prompt, run the initial schema and seed in this order. Both files can be reapplied to the initialized database and preserve existing rows.
+At the `mysql>` prompt, run the initial schema and seed in this order. All four files can be reapplied to the initialized database and preserve existing rows. Existing installations need `003_order_fulfillment.sql` and `004_organization_roles.sql` before starting the updated application.
 
 ```sql
 source /docker-entrypoint-initdb.d/001_initial_schema.sql
 source /docker-entrypoint-initdb.d/002_demo_seed.sql
+source /docker-entrypoint-initdb.d/003_order_fulfillment.sql
+source /docker-entrypoint-initdb.d/004_organization_roles.sql
 SHOW TABLES;
 ```
 
@@ -72,7 +74,7 @@ docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U exchange_search -d
 
 ## Try the batch APIs
 
-Initialize MySQL and set `DEMO_SESSION_SECRET` in `.env` before starting Next.js. The local demo lets you select a seeded organization. `GET /api/demo-session` lists the available organizations, and `POST /api/demo-session` sets the session cookie. The catalog and batch endpoints use that cookie.
+Initialize MySQL and set `DEMO_SESSION_SECRET` in `.env` before starting Next.js. The local demo lets you select a seeded organization. `GET /api/demo-session` lists the available organizations, and `POST /api/demo-session` sets the session cookie. The catalog and batch endpoints use that cookie. Roles come from MySQL, and cannot be set through this session endpoint. Every business mutation also requires `X-Organization-Id` to match the cookie identity; stale tabs receive `409 ACCOUNT_CHANGED`. This header binds the visible account to the action and does not replace session verification. The shared client session refreshes on account changes in other tabs and window focus.
 
 ```powershell
 $api = "http://localhost:3000/api"
@@ -81,27 +83,41 @@ $materials = Invoke-RestMethod "$api/materials" -WebSession $demo
 $material = $materials.items | Where-Object name -eq "Fly ash"
 $body = @{
     materialId = $material.id
-    batchCode = "DEMO-001"
+    batchCode = "FLY-001"
     description = "Dry fly ash for cement blending."
     location = "Bengaluru"
     totalQuantity = "100.000"
 } | ConvertTo-Json
-$batch = Invoke-RestMethod "$api/batches" -Method Post -ContentType "application/json" -Body $body -WebSession $demo
+$batch = Invoke-RestMethod "$api/batches" -Method Post -ContentType "application/json" -Body $body -Headers @{"X-Organization-Id"="1"} -WebSession $demo
 Invoke-RestMethod "$api/batches/$($batch.batchId)" -WebSession $demo
 ```
 
-`GET /api/batches` lists open batches and supports `materialId`, `afterId`, and `limit`. The supplier can edit or close a batch with `PATCH /api/batches/{batchId}`. Publish and edit commit the batch and its search event together. [Data model and API contract](docs/data-model-and-interfaces.md)
+`GET /api/batches` lists a producer's own batches, including closed batches (`status=OPEN|CLOSED|ALL`), or open batches for a consumer. It supports `materialId`, `afterId`, and `limit`. The supplier can edit or close a batch with `PATCH /api/batches/{batchId}`. Publish and edit commit the batch and its search event together. [Data model and API contract](docs/data-model-and-interfaces.md)
 
 To reserve the batch and place an order, select a different organization in a separate demo session. Keep the same idempotency key when retrying the reservation request.
 
 ```powershell
 Invoke-RestMethod "$api/demo-session" -Method Post -ContentType "application/json" -Body '{"organizationId":"2"}' -SessionVariable recipient
 $requestKey = [guid]::NewGuid().ToString()
-$reservation = Invoke-RestMethod "$api/batches/$($batch.batchId)/reservations" -Method Post -ContentType "application/json" -Body '{"quantity":"15.000"}' -Headers @{"Idempotency-Key" = $requestKey} -WebSession $recipient
-Invoke-RestMethod "$api/reservations/$($reservation.reservationId)/order" -Method Post -WebSession $recipient
+$reservation = Invoke-RestMethod "$api/batches/$($batch.batchId)/reservations" -Method Post -ContentType "application/json" -Body '{"quantity":"15.000"}' -Headers @{"Idempotency-Key" = $requestKey; "X-Organization-Id"="2"} -WebSession $recipient
+$delivery = @{
+    contactName = "Aarav Rao"; company = "Bengaluru Cement Lab"
+    email = "procurement@example.com"; phone = "+91 90000 00000"
+    addressLine = "24 Industrial Estate"; city = "Bengaluru"; region = "Karnataka"
+    postalCode = "560001"; country = "India"; deliveryMethod = "DELIVERY"
+    notes = "Call before delivery."
+} | ConvertTo-Json
+$order = Invoke-RestMethod "$api/reservations/$($reservation.reservationId)/order" -Method Post -ContentType "application/json" -Body $delivery -Headers @{"X-Organization-Id"="2"} -WebSession $recipient
+$quotation = @{
+    unitPrice = "12.34"; freight = "100.00"; taxPercent = "18"
+    validUntil = (Get-Date).ToUniversalTime().AddDays(7).ToString("yyyy-MM-dd")
+    terms = "Dispatch within three business days. Payment on delivery."
+} | ConvertTo-Json
+Invoke-RestMethod "$api/orders/$($order.orderId)/quotation" -Method Post -ContentType "application/json" -Body $quotation -Headers @{"X-Organization-Id"="1"} -WebSession $demo
+Invoke-RestMethod "$api/orders/$($order.orderId)/confirm" -Method Post -Headers @{"X-Organization-Id"="2"} -WebSession $recipient
 ```
 
-Use `POST /api/reservations/{reservationId}/cancel` to release an active hold. Reservations and cancellations update available quantity and enqueue a search snapshot in the same transaction. Placing the order converts the hold once and preserves the available quantity.
+Use `POST /api/reservations/{reservationId}/cancel` to release an active hold. Reservations and cancellations update available quantity and enqueue a search snapshot in the same transaction. Requesting the quotation converts the hold once and preserves the available quantity. Contact, address, company, tax reference, delivery preference, and notes are saved in `order_fulfillments`. The supplier issues an INR quotation; the recipient confirms it before its UTC expiry. Prices use exact decimal arithmetic and round half up to paise. Tax applies to the material subtotal plus freight. Quotations are shown in the application; email and shipping integrations are not configured. Existing orders remain readable with `fulfillment: null`. A repeated request returns the original order and does not overwrite its delivery snapshot.
 
 After the exchange, retrieve the batch trace with the supplier session or a recipient session.
 
@@ -137,10 +153,10 @@ After the command succeeds, restart the web app and worker. Pending outbox event
 Once the worker indexes a batch, search with a demo session. The query accepts up to 500 characters.
 
 ```powershell
-Invoke-RestMethod "$api/search?q=cement%20blending&limit=5" -WebSession $demo
+Invoke-RestMethod "$api/search?q=cement%20blending&limit=5" -WebSession $recipient
 ```
 
-Search ranks open batches with available stock by cosine similarity. Use `category` or `materialId` to filter the results. Use `materialId` together with `minAvailableQuantity` to compare quantities in the same unit. Batch details and reservations check current availability in MySQL.
+Search ranks open batches with available stock by cosine similarity. `minSimilarity` accepts 0–1 (up to three decimal places), and the UI slider accepts 0–100%. The response includes `stats.searchedCount` (eligible indexed rows after catalog/quantity filters), `stats.matchedCount` (above threshold before limiting), `stats.elapsedMs` (server processing including embedding and query), and `stats.minSimilarity`. The small results caption shows these real values; it does not imply that live MySQL rows were scanned. The default limit is 20, with at most 50 results per request. Use `category` or `materialId` to filter the results. Use `materialId` together with `minAvailableQuantity` to compare quantities in the same unit. Batch details and reservations check current availability in MySQL.
 
 ## Repository layout
 
@@ -164,3 +180,7 @@ npm run build
 ```
 
 The web app uses the Next.js App Router, TypeScript, Tailwind CSS, and Biome. The npm lockfile records dependency versions for repeatable installs.
+
+Run `npm run test:integration` with the local app, worker, and both databases running. It creates a verification batch and closes it afterwards while retaining its exchange audit records. The checks cover threshold statistics, contact validation and trace permissions, quotation rounding, concurrent issue, and repeatable confirmation.
+
+Migration 004 assigns the seeded Deccan Thermal Works account to `PRODUCER` and the other seeded accounts to `CONSUMER`. Existing suppliers are backfilled as producers on the first application; repeat application preserves assignments. `GET /api/orders` scopes activity to the consumer recipient or the producer supplier. The consumer search excludes its own organization defensively. This remains a local account selector; real authentication is required before deployment with actual customer information.
