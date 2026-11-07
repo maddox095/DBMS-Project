@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { RowDataPacket } from "mysql2/promise";
 import type { NextRequest, NextResponse } from "next/server";
 import { ApiError } from "./http";
+import { mysqlPool } from "./mysql";
 import { isId } from "./validation";
 
 const cookieName = "exchange_demo";
@@ -12,7 +14,7 @@ export function requireDemoConfig() {
     throw new ApiError(
       503,
       "DEMO_SESSION_UNAVAILABLE",
-      "Configure DEMO_SESSION_SECRET for the local demo.",
+      "Organization sessions are temporarily unavailable.",
     );
   }
   return secret;
@@ -46,9 +48,51 @@ export function requireOrganizationId(request: NextRequest) {
     throw new ApiError(
       401,
       "SESSION_REQUIRED",
-      "Select a demo organization first.",
+      "Select your organization first.",
     );
   return id;
+}
+
+export async function currentOrganization(request: NextRequest) {
+  const id = requireOrganizationId(request);
+  const [rows] = await mysqlPool().execute<
+    (RowDataPacket & {
+      id: string;
+      name: string;
+      role: "CONSUMER" | "PRODUCER";
+    })[]
+  >("SELECT id, name, role FROM organizations WHERE id = ?", [id]);
+  if (!rows[0])
+    throw new ApiError(
+      401,
+      "SESSION_REQUIRED",
+      "Choose your account to continue.",
+    );
+  return rows[0];
+}
+
+export async function requireOrganizationRole(
+  request: NextRequest,
+  role: "CONSUMER" | "PRODUCER",
+) {
+  const organization = await currentOrganization(request);
+  if (
+    request.method !== "GET" &&
+    request.headers.get("X-Organization-Id") !== organization.id
+  ) {
+    throw new ApiError(
+      409,
+      "ACCOUNT_CHANGED",
+      "Your active account changed. Refresh this page before continuing.",
+    );
+  }
+  if (organization.role !== role)
+    throw new ApiError(
+      403,
+      "ROLE_FORBIDDEN",
+      `This action is available only to ${role === "PRODUCER" ? "producers" : "consumers"}.`,
+    );
+  return organization.id;
 }
 
 export function setDemoSession(

@@ -64,10 +64,20 @@ export async function getBatch(
   return batchFromRow(rows[0]);
 }
 
-export async function listBatches(params: URLSearchParams) {
+export async function listBatches(params: URLSearchParams, ownerId?: string) {
   const limit = readLimit(params.get("limit"));
-  const conditions = ["b.status = 'OPEN'"];
+  const conditions = ownerId
+    ? ["b.supplier_org_id = CAST(? AS SIGNED)"]
+    : ["b.status = 'OPEN'"];
   const values: string[] = [];
+  if (ownerId) values.push(ownerId);
+  const status = params.get("status");
+  if (ownerId && status !== null && status !== "ALL") {
+    if (status !== "OPEN" && status !== "CLOSED")
+      throw invalidInput("status must be OPEN, CLOSED, or ALL.");
+    conditions.push("b.status = ?");
+    values.push(status);
+  }
   const materialId = params.get("materialId");
   if (materialId !== null) {
     conditions.push("b.material_id = CAST(? AS SIGNED)");

@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireOrganizationId } from "@/server/demo-session";
+import { requireOrganizationRole } from "@/server/demo-session";
 import { json, readObject, respond } from "@/server/http";
 import { readRequestKey, reserveBatch } from "@/server/reservations";
 import { readId, readQuantity } from "@/server/validation";
@@ -9,7 +9,7 @@ export function POST(
   { params }: { params: Promise<{ batchId: string }> },
 ) {
   return respond(async () => {
-    const recipientOrgId = requireOrganizationId(request);
+    const recipientOrgId = await requireOrganizationRole(request, "CONSUMER");
     const batchId = readId((await params).batchId, "batchId");
     const key = readRequestKey(request);
     const body = await readObject(request, ["quantity"]);

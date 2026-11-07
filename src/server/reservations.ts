@@ -7,6 +7,7 @@ import {
 } from "./batches";
 import { ApiError, invalidInput } from "./http";
 import { hasMysqlError, mysqlTransaction } from "./mysql";
+import { orderDetails, type readDelivery, saveDelivery } from "./order-details";
 import { quantityUnits } from "./validation";
 
 type ReservationStatus = "ACTIVE" | "CANCELLED" | "CONVERTED";
@@ -83,7 +84,11 @@ async function getOrder(connection: PoolConnection, reservationId: string) {
     [reservationId],
   );
   if (!rows[0]) throw new Error("The converted reservation has no order.");
-  return { ...rows[0], placedAt: rows[0].placedAt.toISOString() };
+  return {
+    ...rows[0],
+    placedAt: rows[0].placedAt.toISOString(),
+    fulfillment: await orderDetails(connection, rows[0].orderId),
+  };
 }
 
 async function recordAvailabilityChange(
@@ -208,7 +213,11 @@ export function cancelReservation(id: string, recipientOrgId: string) {
   });
 }
 
-export function placeOrder(id: string, recipientOrgId: string) {
+export function placeOrder(
+  id: string,
+  recipientOrgId: string,
+  delivery: ReturnType<typeof readDelivery>,
+) {
   return withOwnedReservation(id, recipientOrgId, async (connection, row) => {
     if (row.status === "CONVERTED") {
       return { order: await getOrder(connection, id), created: false };
@@ -225,6 +234,8 @@ export function placeOrder(id: string, recipientOrgId: string) {
       "INSERT INTO exchange_orders (reservation_id) VALUES (?)",
       [id],
     );
+    const order = await getOrder(connection, id);
+    await saveDelivery(connection, order.orderId, delivery);
     return { order: await getOrder(connection, id), created: true };
   });
 }

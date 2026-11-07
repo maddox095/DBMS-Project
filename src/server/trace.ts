@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2/promise";
 import { getBatch } from "./batches";
 import { ApiError } from "./http";
 import { mysqlTransaction } from "./mysql";
+import { allOrderDetails } from "./order-details";
 import { type ReservationRow, serializeReservation } from "./reservations";
 
 interface Organization {
@@ -49,6 +50,10 @@ export function traceBatch(batchId: string, organizationId: string) {
     if (!sources[0])
       throw new Error("The batch source organization could not be read.");
 
+    const details = await allOrderDetails(
+      connection,
+      rows.flatMap((row) => (row.orderId ? [row.orderId] : [])),
+    );
     const recipients = new Map<string, Organization>();
     const reservations = [];
     const orders = [];
@@ -63,6 +68,7 @@ export function traceBatch(batchId: string, organizationId: string) {
           orderId: row.orderId,
           reservationId: row.reservationId,
           placedAt: row.placedAt.toISOString(),
+          fulfillment: details.get(row.orderId) ?? null,
         });
       }
     }

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
-import { requireOrganizationId } from "@/server/demo-session";
-import { json, respond } from "@/server/http";
+import { requireOrganizationRole } from "@/server/demo-session";
+import { json, readObject, respond } from "@/server/http";
+import { deliveryKeys, readDelivery } from "@/server/order-details";
 import { placeOrder } from "@/server/reservations";
 import { readId } from "@/server/validation";
 
@@ -9,9 +10,10 @@ export function POST(
   { params }: { params: Promise<{ reservationId: string }> },
 ) {
   return respond(async () => {
-    const recipientOrgId = requireOrganizationId(request);
+    const recipientOrgId = await requireOrganizationRole(request, "CONSUMER");
     const id = readId((await params).reservationId, "reservationId");
-    const { order, created } = await placeOrder(id, recipientOrgId);
+    const delivery = readDelivery(await readObject(request, deliveryKeys));
+    const { order, created } = await placeOrder(id, recipientOrgId, delivery);
     return json(order, created ? 201 : 200);
   });
 }

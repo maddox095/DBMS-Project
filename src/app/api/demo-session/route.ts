@@ -12,13 +12,14 @@ import { readId } from "@/server/validation";
 interface OrganizationRow extends RowDataPacket {
   id: string;
   name: string;
+  role: "CONSUMER" | "PRODUCER";
 }
 
 export function GET(request: NextRequest) {
   return respond(async () => {
     requireDemoConfig();
     const [organizations] = await mysqlPool().execute<OrganizationRow[]>(
-      "SELECT id, name FROM organizations ORDER BY id",
+      "SELECT id, name, role FROM organizations ORDER BY id",
     );
     return json({ organizations, organizationId: demoOrganizationId(request) });
   });
@@ -30,7 +31,7 @@ export function POST(request: NextRequest) {
     const body = await readObject(request, ["organizationId"]);
     const organizationId = readId(body.organizationId, "organizationId");
     const [rows] = await mysqlPool().execute<OrganizationRow[]>(
-      "SELECT id, name FROM organizations WHERE id = CAST(? AS SIGNED)",
+      "SELECT id, name, role FROM organizations WHERE id = CAST(? AS SIGNED)",
       [organizationId],
     );
     if (!rows[0])
