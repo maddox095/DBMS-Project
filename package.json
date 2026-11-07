@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "biome check",
     "typecheck": "next typegen && tsc --noEmit",
-    "worker": "node --env-file-if-exists=.env worker/index.mjs"
+    "worker": "node --env-file-if-exists=.env worker/index.mjs",
+    "rebuild-search": "node --env-file-if-exists=.env worker/rebuild.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",

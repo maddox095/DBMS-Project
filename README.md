@@ -124,6 +124,12 @@ ORDER BY batch_id;
 
 The worker marks an event processed after PostgreSQL commits it. Equal or older revisions leave the stored snapshot in place. Failed events stay pending in MySQL and retry with a delay of up to five minutes.
 
+### Rebuild the search index
+
+Stop the web app and indexing worker so batch writes are paused. Keep both databases running, then run `npm run rebuild-search`. The command reads current batch snapshots from MySQL and replaces the PostgreSQL projection in one transaction. A failed rebuild rolls back the projection. Closed batches are included so their revisions still guard against older events.
+
+After the command succeeds, restart the web app and worker. Pending outbox events can replay against the rebuilt rows, and newer events continue updating them.
+
 ## Try semantic search
 
 Once the worker indexes a batch, search with a demo session. The query accepts up to 500 characters.

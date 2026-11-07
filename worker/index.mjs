@@ -1,24 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { createPool } from "mysql2/promise";
+import { mysqlPool } from "../src/server/mysql-pool.mjs";
 import { postgresPool } from "../src/server/postgres.mjs";
 import { processIndexEvents } from "./indexing.mjs";
 
-function required(name) {
-  const value = process.env[name];
-  if (!value)
-    throw new Error(`Set ${name} before starting the indexing worker.`);
-  return value;
-}
-
-const mysql = createPool({
-  host: "127.0.0.1",
-  port: Number(process.env.MYSQL_PORT ?? 3306),
-  database: required("MYSQL_DATABASE"),
-  user: required("MYSQL_USER"),
-  password: required("MYSQL_PASSWORD"),
-  supportBigNumbers: true,
-  bigNumberStrings: true,
-});
+const mysql = mysqlPool();
 const postgres = postgresPool();
 
 const stop = new AbortController();
