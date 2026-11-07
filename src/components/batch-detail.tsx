@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { BatchExchange } from "./batch-exchange";
 import { OrganizationPicker, useDemoSession } from "./demo-session";
 import { type Batch, useApiData } from "./exchange-api";
 
@@ -13,6 +15,10 @@ export function BatchDetail({ batchId }: { batchId: string }) {
     session.organizationId,
   );
   const batch = resource.data;
+  const [notice, setNotice] = useState<{
+    organizationId: string;
+    message: string;
+  } | null>(null);
 
   return (
     <>
@@ -29,8 +35,25 @@ export function BatchDetail({ batchId }: { batchId: string }) {
         </div>
         <OrganizationPicker session={session} />
       </section>
+      {notice?.organizationId === session.organizationId ? (
+        <output className="panel success-notice">{notice.message}</output>
+      ) : null}
       {resource.loading ? (
         <output className="empty-panel">Loading current batch details…</output>
+      ) : null}
+      {batch && session.organizationId && !session.selecting ? (
+        <BatchExchange
+          key={session.organizationId}
+          batch={batch}
+          organizationId={session.organizationId}
+          onChanged={(message) => {
+            setNotice({
+              organizationId: session.organizationId ?? "",
+              message,
+            });
+            resource.retry();
+          }}
+        />
       ) : null}
       {!session.organizationId && !session.loading ? (
         <p className="empty-panel">

@@ -34,7 +34,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               </span>
               Material Exchange
             </Link>
-            <span className="workspace-label">Local demo</span>
+            <nav className="button-row" aria-label="Main navigation">
+              <Link className="secondary-button" href="/batches/new">
+                Publish batch
+              </Link>
+              <span className="workspace-label">Local demo</span>
+            </nav>
           </div>
         </header>
         <main className="shell workspace" id="main-content" tabIndex={-1}>

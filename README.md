@@ -15,6 +15,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). With both databases and the indexing worker running, choose a demo organization, search by material or use, and open a batch to see its current availability.
 
+Use **Publish batch** to add material for the selected organization. On batch details, the supplier can edit the batch, and recipients can reserve a quantity and manage their holds in **Exchange history**. The history shows completed orders and the source organization.
+
 ## Start the local databases
 
 Install Docker with the Compose plugin. Copy `.env.example` to `.env` using `Copy-Item .env.example .env` in PowerShell or `cp .env.example .env` in a POSIX shell. The example values are for local development. Change `MYSQL_PORT` or `POSTGRES_PORT` in `.env` if the defaults are occupied.

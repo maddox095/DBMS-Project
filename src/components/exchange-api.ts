@@ -32,6 +32,39 @@ export interface SearchResult extends BatchSnapshot {
   score: number;
 }
 
+export interface Reservation {
+  reservationId: string;
+  batchId: string;
+  recipientOrgId: string;
+  quantity: string;
+  status: "ACTIVE" | "CANCELLED" | "CONVERTED";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Order {
+  orderId: string;
+  reservationId: string;
+  placedAt: string;
+}
+
+export interface Trace {
+  batch: Batch;
+  source: Organization;
+  recipients: Organization[];
+  reservations: Reservation[];
+  orders: Order[];
+}
+
+class RequestError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
 export function errorMessage(error: unknown) {
   return error instanceof Error
     ? error.message
@@ -42,12 +75,31 @@ export async function apiRequest<T>(path: string, options?: RequestInit) {
   const response = await fetch(path, options);
   const data = await response.json().catch(() => null);
   if (!response.ok || data === null) {
-    throw new Error(
+    throw new RequestError(
       data?.error?.message ??
         "The service could not complete the request. Try again.",
+      response.status,
     );
   }
   return data as T;
+}
+
+export function positiveQuantity(value: string) {
+  const quantity = apiQuantity(value);
+  if (quantity === "0.000")
+    throw new Error("Enter a quantity greater than zero.");
+  return quantity;
+}
+
+export function jsonOptions(
+  method: "POST" | "PATCH",
+  body: unknown,
+): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
 }
 
 export function apiQuantity(value: string) {
@@ -70,6 +122,7 @@ export function useApiData<T>(
     requestKey: string;
     data?: T;
     error?: string;
+    errorStatus?: number;
   }>();
 
   useEffect(() => {
@@ -81,7 +134,12 @@ export function useApiData<T>(
       },
       (error) => {
         if (!controller.signal.aborted)
-          setResult({ requestKey, error: errorMessage(error) });
+          setResult({
+            requestKey,
+            error: errorMessage(error),
+            errorStatus:
+              error instanceof RequestError ? error.status : undefined,
+          });
       },
     );
     return () => controller.abort();
@@ -92,6 +150,7 @@ export function useApiData<T>(
   return {
     data: current?.data,
     error: current?.error,
+    errorStatus: current?.errorStatus,
     loading: path !== null && current === undefined,
     retry: () => setAttempt((value) => value + 1),
   };
