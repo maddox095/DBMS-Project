@@ -12,6 +12,7 @@ import {
   type Trace,
   useApiData,
 } from "./exchange-api";
+import { DeliveryForm, OrderDetails } from "./order-forms";
 
 export function BatchExchange({
   batch,
@@ -28,8 +29,13 @@ export function BatchExchange({
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deliveryFor, setDeliveryFor] = useState<string | null>(null);
   const attempt = useRef<{ quantity: string; key: string } | null>(null);
   const supplier = batch.supplierOrgId === organizationId;
+  function changed(message: string) {
+    trace.retry();
+    onChanged(message);
+  }
 
   async function reserve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,8 +46,8 @@ export function BatchExchange({
       const quantity = positiveQuantity(String(fields.get("quantity") ?? ""));
       if (attempt.current?.quantity !== quantity)
         attempt.current = { quantity, key: crypto.randomUUID() };
-      const options = jsonOptions("POST", { quantity });
-      await apiRequest<Reservation>(
+      const options = jsonOptions("POST", { quantity }, organizationId);
+      const reservation = await apiRequest<Reservation>(
         `/api/batches/${batch.batchId}/reservations`,
         {
           ...options,
@@ -52,7 +58,10 @@ export function BatchExchange({
         },
       );
       attempt.current = null;
-      onChanged("Reservation saved.");
+      setDeliveryFor(reservation.reservationId);
+      changed(
+        "Quantity reserved. Add your contact and delivery details to request a quotation.",
+      );
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -60,14 +69,16 @@ export function BatchExchange({
     }
   }
 
-  async function act(id: string, action: "cancel" | "order") {
+  async function cancel(id: string) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/api/reservations/${id}/${action}`, { method: "POST" });
-      onChanged(
-        action === "cancel" ? "Reservation cancelled." : "Order placed.",
-      );
+      await apiRequest(`/api/reservations/${id}/cancel`, {
+        method: "POST",
+        headers: { "X-Organization-Id": organizationId },
+      });
+      setDeliveryFor(null);
+      changed("Reservation cancelled.");
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -125,14 +136,16 @@ export function BatchExchange({
       ) : null}
       <section className="panel exchange-panel" aria-labelledby="history-title">
         <div className="section-heading">
-          <h2 id="history-title">Exchange history</h2>
+          <h2 id="history-title">
+            {supplier ? "Buyer requests & orders" : "Your reservation history"}
+          </h2>
           <button
             className="secondary-button"
             type="button"
             disabled={busy}
             onClick={trace.retry}
           >
-            Refresh history
+            {supplier ? "Refresh requests" : "Refresh reservations"}
           </button>
         </div>
         {trace.loading ? (
@@ -165,6 +178,7 @@ export function BatchExchange({
                 return (
                   <article
                     className="history-record"
+                    id={`reservation-${reservation.reservationId}`}
                     key={reservation.reservationId}
                     aria-label={`Reservation ${reservation.reservationId}`}
                   >
@@ -172,7 +186,10 @@ export function BatchExchange({
                       <h3>{recipient?.name}</h3>
                       <span className="tag">
                         {reservation.status === "CONVERTED"
-                          ? "Ordered"
+                          ? order?.fulfillment?.status === "CONFIRMED" ||
+                            !order?.fulfillment
+                            ? "Ordered"
+                            : "Order requested"
                           : reservation.status === "CANCELLED"
                             ? "Cancelled"
                             : "Reserved"}
@@ -185,35 +202,53 @@ export function BatchExchange({
                       </span>
                     </p>
                     {order ? (
-                      <p className="field-hint">
-                        Order {order.orderId} ·{" "}
-                        {new Date(order.placedAt).toLocaleString()}
-                      </p>
+                      <OrderDetails
+                        order={order}
+                        organizationId={organizationId}
+                        supplier={supplier}
+                        unit={batch.material.unit}
+                        onChanged={changed}
+                      />
                     ) : null}
                     {reservation.status === "ACTIVE" &&
                     reservation.recipientOrgId === organizationId ? (
-                      <div className="button-row">
-                        <button
-                          className="primary-button"
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void act(reservation.reservationId, "order")
-                          }
-                        >
-                          Place order
-                        </button>
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void act(reservation.reservationId, "cancel")
-                          }
-                        >
-                          Cancel reservation
-                        </button>
-                      </div>
+                      deliveryFor === reservation.reservationId ? (
+                        <DeliveryForm
+                          reservationId={reservation.reservationId}
+                          organizationId={organizationId}
+                          company={recipient?.name ?? ""}
+                          onCancel={() => setDeliveryFor(null)}
+                          onSaved={() => {
+                            setDeliveryFor(null);
+                            changed(
+                              "Quotation requested. Your contact and delivery details have been saved.",
+                            );
+                          }}
+                        />
+                      ) : (
+                        <div className="button-row">
+                          <button
+                            className="primary-button"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              setDeliveryFor(reservation.reservationId)
+                            }
+                          >
+                            Add order details
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void cancel(reservation.reservationId)
+                            }
+                          >
+                            Cancel reservation
+                          </button>
+                        </div>
+                      )
                     ) : null}
                   </article>
                 );

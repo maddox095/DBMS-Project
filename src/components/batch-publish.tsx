@@ -2,10 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { BatchForm } from "./batch-form";
-import { OrganizationPicker, useDemoSession } from "./demo-session";
+import { useOrganizationSession } from "./organization-session";
 
 export function BatchPublish() {
-  const session = useDemoSession();
+  const session = useOrganizationSession();
   const router = useRouter();
   return (
     <>
@@ -18,13 +18,12 @@ export function BatchPublish() {
             find it.
           </p>
         </div>
-        <OrganizationPicker session={session} />
       </section>
       {session.organizationId && !session.selecting ? (
         <BatchForm
           key={session.organizationId}
           organizationId={session.organizationId}
-          onSaved={(batch) => router.push(`/batches/${batch.batchId}`)}
+          onSaved={(batch) => router.push(`/producer/batches/${batch.batchId}`)}
         />
       ) : (
         <p className="empty-panel">

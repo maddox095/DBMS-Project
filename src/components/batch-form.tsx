@@ -48,7 +48,7 @@ export function BatchForm({
       };
       const saved = await apiRequest<Batch>(
         batch ? `/api/batches/${batch.batchId}` : "/api/batches",
-        jsonOptions(batch ? "PATCH" : "POST", body),
+        jsonOptions(batch ? "PATCH" : "POST", body, organizationId),
       );
       onSaved(saved);
     } catch (failure) {
