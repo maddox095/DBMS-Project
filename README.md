@@ -4,6 +4,8 @@ A DBMS course project for finding surplus industrial materials and tracing excha
 
 The current setup includes material discovery and batch detail screens, the database schemas, the indexing worker, and APIs for semantic search and exchanges.
 
+Follow the course demonstration to publish a batch, find it through semantic search, complete exchanges, and inspect the database records. [Course demonstration](docs/course-demo.md)
+
 ## Run the web app
 
 Install Node.js 22 or later and npm. From the repository root, run:
@@ -161,4 +163,4 @@ npm run typecheck
 npm run build
 ```
 
-The starter uses the Next.js App Router, TypeScript, Tailwind CSS, and Biome. The npm lockfile records dependency versions for repeatable installs.
+The web app uses the Next.js App Router, TypeScript, Tailwind CSS, and Biome. The npm lockfile records dependency versions for repeatable installs.

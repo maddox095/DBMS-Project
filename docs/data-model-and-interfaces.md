@@ -1,6 +1,6 @@
 # Industrial Byproduct Exchange data model and interfaces
 
-**Review draft · Task 01**
+**Design contract · Task 01**
 
 MySQL owns inventory, reservations, orders, and traceability. PostgreSQL holds a derived search projection. The Node.js worker copies committed changes from MySQL to PostgreSQL. A user discovers a batch through search, then opens its MySQL-backed details before reserving it.
 
