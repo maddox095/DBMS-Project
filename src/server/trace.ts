@@ -16,12 +16,18 @@ interface TraceRow extends ReservationRow {
   placedAt: Date | null;
 }
 
-export function traceBatch(batchId: string, organizationId: string) {
-  return mysqlTransaction(async (connection) => {
-    const batch = await getBatch(batchId, connection);
-    const isSupplier = batch.supplierOrgId === organizationId;
-    const [rows] = await connection.execute<TraceRow[]>(
-      `SELECT r.id AS reservationId, r.batch_id AS batchId,
+export function traceBatch(
+  batchId: string,
+  organizationId: string,
+  role: "PRODUCER" | "CONSUMER",
+) {
+  return mysqlTransaction(
+    role,
+    async (connection) => {
+      const batch = await getBatch(batchId, connection);
+      const isSupplier = batch.supplierOrgId === organizationId;
+      const [rows] = await connection.execute<TraceRow[]>(
+        `SELECT r.id AS reservationId, r.batch_id AS batchId,
               r.recipient_org_id AS recipientOrgId, r.quantity, r.status,
               r.created_at AS createdAt, r.updated_at AS updatedAt,
               recipient.name AS recipientName, orders.id AS orderId,
@@ -32,52 +38,54 @@ export function traceBatch(batchId: string, organizationId: string) {
        WHERE r.batch_id = CAST(? AS SIGNED)
        ${isSupplier ? "" : "AND r.recipient_org_id = CAST(? AS SIGNED)"}
        ORDER BY r.id`,
-      isSupplier ? [batchId] : [batchId, organizationId],
-    );
-    if (!isSupplier && rows.length === 0) {
-      throw new ApiError(
-        403,
-        "TRACE_FORBIDDEN",
-        "Only the supplier and recipients can view this trace.",
+        isSupplier ? [batchId] : [batchId, organizationId],
       );
-    }
-
-    const [sources] = await connection.execute<
-      (RowDataPacket & Organization)[]
-    >("SELECT id, name FROM organizations WHERE id = CAST(? AS SIGNED)", [
-      batch.supplierOrgId,
-    ]);
-    if (!sources[0])
-      throw new Error("The batch source organization could not be read.");
-
-    const details = await allOrderDetails(
-      connection,
-      rows.flatMap((row) => (row.orderId ? [row.orderId] : [])),
-    );
-    const recipients = new Map<string, Organization>();
-    const reservations = [];
-    const orders = [];
-    for (const row of rows) {
-      recipients.set(row.recipientOrgId, {
-        id: row.recipientOrgId,
-        name: row.recipientName,
-      });
-      reservations.push(serializeReservation(row));
-      if (row.orderId !== null && row.placedAt !== null) {
-        orders.push({
-          orderId: row.orderId,
-          reservationId: row.reservationId,
-          placedAt: row.placedAt.toISOString(),
-          fulfillment: details.get(row.orderId) ?? null,
-        });
+      if (!isSupplier && rows.length === 0) {
+        throw new ApiError(
+          403,
+          "TRACE_FORBIDDEN",
+          "Only the supplier and recipients can view this trace.",
+        );
       }
-    }
-    return {
-      batch,
-      source: sources[0],
-      recipients: [...recipients.values()],
-      reservations,
-      orders,
-    };
-  }, "snapshot");
+
+      const [sources] = await connection.execute<
+        (RowDataPacket & Organization)[]
+      >("SELECT id, name FROM organizations WHERE id = CAST(? AS SIGNED)", [
+        batch.supplierOrgId,
+      ]);
+      if (!sources[0])
+        throw new Error("The batch source organization could not be read.");
+
+      const details = await allOrderDetails(
+        connection,
+        rows.flatMap((row) => (row.orderId ? [row.orderId] : [])),
+      );
+      const recipients = new Map<string, Organization>();
+      const reservations = [];
+      const orders = [];
+      for (const row of rows) {
+        recipients.set(row.recipientOrgId, {
+          id: row.recipientOrgId,
+          name: row.recipientName,
+        });
+        reservations.push(serializeReservation(row));
+        if (row.orderId !== null && row.placedAt !== null) {
+          orders.push({
+            orderId: row.orderId,
+            reservationId: row.reservationId,
+            placedAt: row.placedAt.toISOString(),
+            fulfillment: details.get(row.orderId) ?? null,
+          });
+        }
+      }
+      return {
+        batch,
+        source: sources[0],
+        recipients: [...recipients.values()],
+        reservations,
+        orders,
+      };
+    },
+    "snapshot",
+  );
 }

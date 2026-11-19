@@ -123,7 +123,7 @@ export async function reserveBatch(
   key: string,
   quantity: string,
 ) {
-  return mysqlTransaction(async (connection) => {
+  return mysqlTransaction("CONSUMER", async (connection) => {
     const supplierOrgId = await lockBatch(connection, batchId);
     const existing = await findByRequestKey(connection, recipientOrgId, key);
     if (existing) return replayReservation(existing, batchId, quantity);
@@ -171,7 +171,7 @@ async function withOwnedReservation<T>(
   recipientOrgId: string,
   work: (connection: PoolConnection, row: ReservationRow) => Promise<T>,
 ) {
-  return mysqlTransaction(async (connection) => {
+  return mysqlTransaction("CONSUMER", async (connection) => {
     const initial = await getReservation(connection, id);
     if (!(await lockBatch(connection, initial.batchId))) throw batchNotFound();
     const row = await getReservation(connection, id);

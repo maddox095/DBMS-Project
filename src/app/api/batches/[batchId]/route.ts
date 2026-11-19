@@ -1,10 +1,8 @@
 import type { NextRequest } from "next/server";
+import { currentOrganization, requireOrganizationRole } from "@/server/auth";
 import { editBatch, getBatch } from "@/server/batches";
-import {
-  currentOrganization,
-  requireOrganizationRole,
-} from "@/server/demo-session";
 import { ApiError, json, respond } from "@/server/http";
+import { mysqlPool } from "@/server/mysql";
 import { readId } from "@/server/validation";
 
 type BatchRoute = { params: Promise<{ batchId: string }> };
@@ -13,7 +11,10 @@ export function GET(request: NextRequest, { params }: BatchRoute) {
   return respond(async () => {
     const organization = await currentOrganization(request);
     const { batchId } = await params;
-    const batch = await getBatch(readId(batchId, "batchId"));
+    const batch = await getBatch(
+      readId(batchId, "batchId"),
+      mysqlPool(organization.role),
+    );
     if (
       organization.role === "PRODUCER" &&
       batch.supplierOrgId !== organization.id

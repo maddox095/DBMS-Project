@@ -1,17 +1,40 @@
+x-runtime-database: &runtime-database
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE in .env}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+  POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  EMBEDDING_CACHE_DIR: /app/model-cache
+
 services:
   mysql:
     image: mysql:8.4.11
     command: ["--default-time-zone=+00:00"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_ROOT_HOST: localhost
       MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE in .env}
       MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER in .env}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_AUTH_PASSWORD: ${MYSQL_AUTH_PASSWORD:?Set MYSQL_AUTH_PASSWORD in .env}
+      MYSQL_PRODUCER_PASSWORD: ${MYSQL_PRODUCER_PASSWORD:?Set MYSQL_PRODUCER_PASSWORD in .env}
+      MYSQL_CONSUMER_PASSWORD: ${MYSQL_CONSUMER_PASSWORD:?Set MYSQL_CONSUMER_PASSWORD in .env}
+      MYSQL_WORKER_PASSWORD: ${MYSQL_WORKER_PASSWORD:?Set MYSQL_WORKER_PASSWORD in .env}
     ports:
       - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./db/mysql/migrations:/docker-entrypoint-initdb.d:ro
+      - ./db/mysql/examples:/opt/exchange-sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_AUTH_PASSWORD mysql --protocol=tcp -h 127.0.0.1 -u exchange_auth $$MYSQL_DATABASE --execute='SELECT 1 FROM auth_users LIMIT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
   postgres:
     image: pgvector/pgvector:0.8.7-pg17
@@ -25,7 +48,53 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./db/postgres/init.sql:/docker-entrypoint-initdb.d/01-vector.sql:ro
       - ./db/postgres/migrations/001_batch_search.sql:/docker-entrypoint-initdb.d/02-batch-search.sql:ro
+      - ./db/postgres/migrations/002_batch_search_removals.sql:/docker-entrypoint-initdb.d/03-batch-search-removals.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -c 'SELECT 1 FROM batch_search_removals LIMIT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  app:
+    build:
+      context: .
+      target: application
+    init: true
+    environment:
+      <<: *runtime-database
+      MYSQL_AUTH_PASSWORD: ${MYSQL_AUTH_PASSWORD:?Set MYSQL_AUTH_PASSWORD in .env}
+      MYSQL_PRODUCER_PASSWORD: ${MYSQL_PRODUCER_PASSWORD:?Set MYSQL_PRODUCER_PASSWORD in .env}
+      MYSQL_CONSUMER_PASSWORD: ${MYSQL_CONSUMER_PASSWORD:?Set MYSQL_CONSUMER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - app-model-cache:/app/model-cache
+    depends_on: &healthy-databases
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/auth/session').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      target: worker
+    init: true
+    environment:
+      <<: *runtime-database
+      MYSQL_WORKER_PASSWORD: ${MYSQL_WORKER_PASSWORD:?Set MYSQL_WORKER_PASSWORD in .env}
+    volumes:
+      - worker-model-cache:/app/model-cache
+    depends_on: *healthy-databases
 
 volumes:
   mysql-data:
   postgres-data:
+  app-model-cache:
+  worker-model-cache:

@@ -15,6 +15,14 @@ erDiagram
     RESERVATION ||..o| EXCHANGE_ORDER : becomes
     EXCHANGE_ORDER ||..o| ORDER_FULFILLMENT : details
     BATCH ||..o{ BATCH_INDEX_EVENT : produces
+    ORGANIZATION ||..o| AUTH_ORGANIZATION_NAME : reserves
+    ORGANIZATION ||..o{ AUTH_USER : has
+    AUTH_USER ||..o{ AUTH_SESSION : starts
+    AUTH_RATE_LIMIT {
+      binary bucket_hash PK
+      int attempts
+      timestamp expires_at
+    }
 ```
 
 | Table | Columns and constraints |
@@ -51,7 +59,7 @@ Example with a `100.000 kg` batch. Reserving `60.000 kg` leaves `40.000 kg`. Con
 
 ## HTTP interfaces
 
-Use JSON. The local demo resolves the acting organization from a server-side demo session. Catalog is shared. Search/reservations/orders require a Consumer role; publishing/editing/quoting require a Producer role, checked against MySQL on every request. Producer batch lists/details are scoped to owned inventory. Business writes require `X-Organization-Id` matching the signed session, otherwise `409 ACCOUNT_CHANGED`. Writes also enforce the batch supplier and reservation recipient ownership rules above. A supplier sees its batch's full trace. A recipient sees its own reservations and orders for that batch. The trace includes the supplier and the distinct recipient organizations visible to the caller.
+Use JSON. The server resolves the acting organization from an opaque, database-backed login session joined to the user's immutable organization membership. Catalog is shared. Search/reservations/orders require a Consumer role; publishing/editing/quoting require a Producer role, checked against MySQL on every request. Producer batch lists/details are scoped to owned inventory. Business writes require `X-Organization-Id` matching the authenticated session, otherwise `409 ACCOUNT_CHANGED`. Writes also enforce the batch supplier and reservation recipient ownership rules above. A supplier sees its batch's full trace. A recipient sees its own reservations and orders for that batch. The trace includes the supplier and the distinct recipient organizations visible to the caller.
 
 | Endpoint | Request | Success |
 | --- | --- | --- |
@@ -118,7 +126,7 @@ type Trace = {
 };
 ```
 
-Use `{ error: { code, message } }` for failures. Return `400` for invalid input (including blank search text), `401` for a missing demo session, `403` for an organization outside the allowed scope, `404` for a missing record, `409` for conflicts such as insufficient quantity or an incompatible state, and `503` when semantic search is unavailable. Scope the reservation key to the recipient. A retry with the same key, batch, and quantity returns the existing reservation, even if its state has changed. Reusing that key for another batch or quantity returns `409`. The unique constraint protects simultaneous retries. Use a default list limit of 20 and a maximum of 50.
+Use `{ error: { code, message } }` for failures. Return `400` for invalid input (including blank search text), `401` for a missing or expired login session, `403` for an organization outside the allowed scope, `404` for a missing record, `409` for conflicts such as insufficient quantity or an incompatible state, and `503` when semantic search is unavailable. Scope the reservation key to the recipient. A retry with the same key, batch, and quantity returns the existing reservation, even if its state has changed. Reusing that key for another batch or quantity returns `409`. The unique constraint protects simultaneous retries. Use a default list limit of 20 and a maximum of 50.
 
 Discovery links to `/batches/{batchId}`. The detail view refreshes availability from MySQL. The reservation endpoint rechecks it under the lock even when search and detail have both returned a positive quantity.
 
@@ -153,15 +161,15 @@ Example `batch_index_events.payload` with schema version 1.
 
 The event row's `batch_id` and `batch_revision` match the payload. `schemaVersion` describes the message format, while `batch.revision` orders snapshots for a single batch.
 
-1. The demo runs one worker. Poll committed events where `processed_at IS NULL` and `next_attempt_at` is due. Validate the schema version and embed the snapshot's searchable text.
-2. Upsert the snapshot and embedding into PostgreSQL by `batch_id`. On conflict update only when the incoming revision exceeds the stored revision. This covers out-of-order delivery and equal-revision replay. [PostgreSQL 17 upsert](https://www.postgresql.org/docs/17/sql-insert.html)
+1. The demo runs one worker. Poll committed events where `processed_at IS NULL` and `next_attempt_at` is due. Validate the event and acquire a transaction-scoped lock for its batch in PostgreSQL.
+2. For an open batch, embed and upsert the snapshot when its revision exceeds the existing vector or removal revision. For a closed batch, record the removal revision and delete any vector at or below that revision in the same transaction. The persistent marker protects against out-of-order delivery and equal-revision replay. [PostgreSQL 17 upsert](https://www.postgresql.org/docs/17/sql-insert.html)
 3. Mark the event processed in MySQL after PostgreSQL commits, including when the revision check makes the event a no-op. If indexing fails, increment attempts, record the failure in worker logs, and schedule another attempt with backoff. A crash between the PostgreSQL commit and MySQL acknowledgement results in a safe replay.
 
-The rebuild reads current batch snapshots and revisions from MySQL and regenerates the projection. For the course demo, pause writes and the worker during the rebuild, then resume both. Include closed rows so their revisions continue to guard against older events.
+The rebuild reads current MySQL snapshots and regenerates both open vectors and closed-batch removal markers. Pause writes and the worker during the rebuild, then resume both.
 
 ## PostgreSQL search projection
 
-Use one `batch_search` row per MySQL batch ID. Map `BatchSnapshot` to typed columns using `bigint` for IDs and revision and `numeric(14,3)` for availability. Add `embedding vector(384)` and `indexed_at timestamptz`. Start with the batch ID primary key and B-tree indexes on `material_id` and `category` for eligible rows.
+Use one `batch_search` row per open MySQL batch ID. Map `BatchSnapshot` to typed columns using `bigint` for IDs and revision and `numeric(14,3)` for availability. Store `embedding vector(384)` and `indexed_at timestamptz`. Use B-tree indexes on `material_id` and `category` for eligible rows. A closed batch has a `batch_search_removals` row keyed by batch ID with its last removal revision.
 
 Use `Xenova/all-MiniLM-L6-v2` with Transformers.js in Node.js. Embed the material name, category, and trimmed batch description in that order, joined by newline characters. The worker and search API share a pinned model revision, inference precision, mean pooling, and normalization. Both produce 384-dimensional vectors. Rebuild the index when the model or input formatting changes. [ONNX model](https://huggingface.co/Xenova/all-MiniLM-L6-v2) · [Embedding model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
 
@@ -169,17 +177,21 @@ Apply the selected filters to rows where status is `OPEN` and availability is po
 
 ## Review decisions
 
-- Confirm the seeded material categories and units, and the scope of the local account selector.
+- Confirm the seeded material categories and units, and the scope of the authenticated account membership.
 - Confirm one batch per reservation and one full conversion per reservation. Order placement represents completion for the course demo.
 - Confirm the batch detail route, JSON contract, and the source and recipient visibility rules.
 - Confirm the embedding model against a few representative material queries and agree on the shared runtime settings.
 
 ### Delivery and quotation snapshots
 
-Contact details are visible only in the existing supplier/recipient trace scope. The account page remains a local session selector, not production identity verification; deployment requires real authentication and organization membership checks before collecting real customer data. The interface removes rehearsal wording without changing that access model.
+Contact details are visible only in the existing supplier/recipient trace scope. The account page shows only the signed-in user and organization. Signup creates a new organization; existing organizations can receive users only through a trusted administrator command. Password-based authentication establishes membership; company ownership and email addresses are not externally verified.
 
 New requests require a validated delivery/contact snapshot. Order creation and reservation conversion commit together. Supplier quotations are issued once and preserve exact amounts and terms. Monetary strings accept at most two decimals; totals use integer arithmetic with half-up rounding. Validity dates are UTC calendar dates. Quotes cannot be edited after issue, and dispatch/payment are coordinated outside the app. An expired quotation cannot be accepted.
 
 ### Separate workspaces
 
-The root route resolves to consumer discovery or producer inventory according to the stored role. `/producer` and `/producer/orders` expose only producer tools; `/orders` exposes consumer activity. Producer batch management uses `/producer/batches/{id}`. Direct visits to the wrong workspace render a role gate without forms. Accounts can be changed only on `/account`, with the active role/name visible in navigation. Account changes broadcast to other tabs, and business mutation headers prevent an old view from acting as the newly selected organization.
+The root route resolves to consumer discovery or producer inventory according to the stored role. `/producer` and `/producer/orders` expose only producer tools; `/orders` exposes consumer activity. Producer batch management uses `/producer/batches/{id}`. Direct visits to the wrong workspace render a role gate without forms. Users must sign out and sign in to use a different account. The active role/name remains visible in navigation. Authentication changes broadcast to other tabs, and business mutation headers prevent an old view from acting as a different organization.
+
+### Authentication tables (migration 005)
+
+`auth_users` holds a unique normalized email, full name, salted password hash, fixed organization FK and optional disabled timestamp. `auth_sessions` holds only a SHA-256 token hash, user FK, creation, last activity and absolute expiry; raw cookies are never stored. `auth_organization_names` reserves normalized organization names, including seeded organizations, against public claims. `auth_rate_limits` persists hashed fixed-window counters. Signup creates organization, name reservation, user and session in one transaction. [Authentication details](authentication.md)

@@ -1,8 +1,10 @@
-import { pipeline } from "@huggingface/transformers";
+import { env, pipeline } from "@huggingface/transformers";
 
 const model = "Xenova/all-MiniLM-L6-v2";
 const revision = "751bff37182d3f1213fa05d7196b954e230abad9";
 let extractor;
+if (process.env.EMBEDDING_CACHE_DIR)
+  env.cacheDir = process.env.EMBEDDING_CACHE_DIR;
 
 /** @param {string} text */
 export async function embedText(text) {

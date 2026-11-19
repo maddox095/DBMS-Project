@@ -327,7 +327,7 @@ export function Discovery() {
                 key={batch.batchId}
                 batch={batch}
                 supplierName={
-                  session.organizations.find(
+                  session.suppliers.find(
                     (item) => item.id === batch.supplierOrgId,
                   )?.name ?? `Organization ${batch.supplierOrgId}`
                 }

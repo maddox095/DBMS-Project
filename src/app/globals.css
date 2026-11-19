@@ -768,3 +768,129 @@ input[type="range"] {
   color: var(--ink);
   font-weight: 550;
 }
+
+.auth-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+}
+.auth-intro h1 {
+  font-size: clamp(2rem, 4.4vw, 3.5rem);
+}
+.auth-explainer {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.auth-explainer strong {
+  display: block;
+  color: var(--ink);
+  margin-bottom: 0.25rem;
+}
+.auth-panel > .muted {
+  margin-top: 0.5rem;
+}
+.auth-fields {
+  display: grid;
+  gap: 1.125rem;
+  margin-top: 1.5rem;
+}
+.auth-fields > .primary-button {
+  width: 100%;
+}
+.password-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+}
+.password-label label {
+  margin: 0;
+}
+.text-button {
+  color: var(--accent-hover);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  min-height: 2.75rem;
+  padding: 0.375rem;
+}
+.text-button:disabled {
+  cursor: wait;
+}
+.auth-switch {
+  font-size: 0.875rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+}
+.auth-switch a {
+  color: var(--accent-hover);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.role-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.role-options legend {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.role-option {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--control);
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+.role-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.role-option input {
+  width: 1rem;
+  min-height: 0;
+  height: 1rem;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.role-option > span {
+  min-width: 0;
+}
+.role-option span span {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+.account-details {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+.signed-out {
+  display: grid;
+  gap: 1.25rem;
+  padding: clamp(1.25rem, 4vw, 3rem);
+}
+.signed-out > p {
+  max-width: 60ch;
+}
+@media (min-width: 48rem) {
+  .auth-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem);
+    gap: clamp(2rem, 6vw, 5rem);
+  }
+  .auth-intro {
+    padding-top: 1rem;
+  }
+}

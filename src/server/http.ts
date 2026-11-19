@@ -5,6 +5,7 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    public readonly retryAfter?: number,
   ) {
     super(message);
   }
@@ -26,10 +27,13 @@ export async function respond(handle: () => Promise<Response>) {
     return await handle();
   } catch (error) {
     if (error instanceof ApiError) {
-      return json(
+      const response = json(
         { error: { code: error.code, message: error.message } },
         error.status,
       );
+      if (error.retryAfter !== undefined)
+        response.headers.set("Retry-After", String(error.retryAfter));
+      return response;
     }
     console.error("API request failed", error);
     return json(
@@ -39,10 +43,31 @@ export async function respond(handle: () => Promise<Response>) {
   }
 }
 
-export async function readObject(request: Request, allowedKeys: string[]) {
+export async function readObject(
+  request: Request,
+  allowedKeys: string[],
+  maxBytes = 128 * 1024,
+) {
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let size = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new ApiError(413, "BODY_TOO_LARGE", "The request is too large.");
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  }
   let value: unknown;
   try {
-    value = await request.json();
+    value = JSON.parse(body);
   } catch {
     throw invalidInput("Send a valid JSON object.");
   }

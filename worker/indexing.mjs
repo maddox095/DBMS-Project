@@ -44,7 +44,36 @@ function decodeEvent(event) {
   return batch;
 }
 
-export async function upsertBatchSearch(postgres, batch) {
+// Run inside the caller's PostgreSQL transaction. The per-batch lock makes
+// checking revisions, replacing a vector, and recording deletion atomic.
+export async function writeBatchProjection(postgres, batch) {
+  const key = [batch.batchId, batch.revision];
+  await postgres.query("SELECT pg_advisory_xact_lock($1::bigint)", [
+    batch.batchId,
+  ]);
+
+  if (batch.status === "CLOSED") {
+    await postgres.query(
+      `INSERT INTO batch_search_removals (batch_id, revision) VALUES ($1, $2)
+       ON CONFLICT (batch_id) DO UPDATE SET revision = EXCLUDED.revision
+       WHERE batch_search_removals.revision < EXCLUDED.revision`,
+      key,
+    );
+    await postgres.query(
+      "DELETE FROM batch_search WHERE batch_id = $1 AND revision <= $2",
+      key,
+    );
+    return;
+  }
+
+  const { rowCount } = await postgres.query(
+    `SELECT 1 FROM batch_search_removals WHERE batch_id = $1 AND revision >= $2
+     UNION ALL
+     SELECT 1 FROM batch_search WHERE batch_id = $1 AND revision >= $2`,
+    key,
+  );
+  if (rowCount) return;
+
   const { material } = batch;
   const text = [
     material.name,
@@ -102,7 +131,18 @@ export async function processIndexEvents(mysql, postgres, signal) {
   for (const event of events) {
     if (signal.aborted) break;
     try {
-      await upsertBatchSearch(postgres, decodeEvent(event));
+      const batch = decodeEvent(event);
+      const connection = await postgres.connect();
+      try {
+        await connection.query("BEGIN");
+        await writeBatchProjection(connection, batch);
+        await connection.query("COMMIT");
+      } catch (error) {
+        await connection.query("ROLLBACK");
+        throw error;
+      } finally {
+        connection.release();
+      }
       await mysql.execute(
         `UPDATE batch_index_events SET processed_at = CURRENT_TIMESTAMP(6)
          WHERE id = CAST(? AS SIGNED) AND processed_at IS NULL`,

@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
+import { errorMessage } from "./exchange-api";
 import { useOrganizationSession } from "./organization-session";
 
 export function SiteHeader() {
   const session = useOrganizationSession();
   const path = usePathname();
+  const router = useRouter();
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const producer = session.role === "PRODUCER";
   const links = producer
     ? [
@@ -61,10 +65,46 @@ export function SiteHeader() {
                 </Link>
               ))
             : null}
-          <Link className="nav-link account-link" href="/account">
-            {session.organization ? "Change account" : "Choose account"}
-          </Link>
+          {session.user ? (
+            <>
+              <Link className="nav-link account-link" href="/account">
+                My account
+              </Link>
+              <button
+                type="button"
+                className="nav-link text-button"
+                disabled={session.selecting}
+                onClick={() => {
+                  setLogoutError(null);
+                  void session.logout().then(
+                    () => router.replace("/login"),
+                    (error) => setLogoutError(errorMessage(error)),
+                  );
+                }}
+              >
+                {session.selecting ? "Signing out…" : "Sign out"}
+              </button>
+            </>
+          ) : (
+            <>
+              <Link
+                className="nav-link"
+                href="/login"
+                aria-current={path === "/login" ? "page" : undefined}
+              >
+                Sign in
+              </Link>
+              <Link className="primary-button" href="/signup">
+                Create account
+              </Link>
+            </>
+          )}
         </nav>
+        {logoutError ? (
+          <p className="inline-error" role="alert">
+            {logoutError}
+          </p>
+        ) : null}
       </div>
     </header>
   );

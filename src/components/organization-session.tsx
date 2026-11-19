@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   createContext,
   Fragment,
@@ -12,72 +13,87 @@ import {
 } from "react";
 import {
   apiRequest,
-  errorMessage,
+  jsonOptions,
   type Organization,
   useApiData,
 } from "./exchange-api";
 
-type SessionData = {
-  organizations: Organization[];
-  organizationId: string | null;
-};
+export interface SessionData {
+  user: { id: string; fullName: string; email: string } | null;
+  organization: (Organization & { role: "CONSUMER" | "PRODUCER" }) | null;
+}
 function useSessionState() {
-  const session = useApiData<SessionData>("/api/demo-session");
-  const [selected, setSelected] = useState<{
-    organization: Organization;
+  const session = useApiData<SessionData>("/api/auth/session");
+  const [override, setOverride] = useState<{
     source: SessionData | undefined;
+    data: SessionData | null;
   } | null>(null);
   const [selecting, setSelecting] = useState(false);
-  const [selectionError, setSelectionError] = useState<string | null>(null);
   const channel = useRef<BroadcastChannel | null>(null);
+  const latest = useRef(session);
+  latest.current = session;
+  const data =
+    override && override.source === session.data ? override.data : session.data;
+  const organization = data?.organization ?? null;
+  const user = data?.user ?? null;
+  const suppliers = useApiData<{ items: Organization[] }>(
+    user ? "/api/suppliers" : null,
+    user?.id ?? null,
+  );
   useEffect(() => {
-    function refresh() {
-      session.retry();
+    function invalidate() {
+      setOverride({ source: latest.current.data, data: null });
+      latest.current.retry();
     }
-    channel.current = new BroadcastChannel("material-exchange-account");
-    channel.current.onmessage = refresh;
+    function refresh() {
+      latest.current.retry();
+    }
+    channel.current = new BroadcastChannel("material-exchange-auth");
+    channel.current.onmessage = invalidate;
     window.addEventListener("focus", refresh);
+    window.addEventListener("exchange:session-expired", invalidate);
     return () => {
       channel.current?.close();
       window.removeEventListener("focus", refresh);
+      window.removeEventListener("exchange:session-expired", invalidate);
     };
-  }, [session.retry]);
-  async function select(organizationId: string) {
+  }, []);
+  async function authenticate(mode: "login" | "signup", body: unknown) {
     setSelecting(true);
-    setSelectionError(null);
     try {
-      const result = await apiRequest<{ organization: Organization }>(
-        "/api/demo-session",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ organizationId }),
-        },
+      const result = await apiRequest<SessionData>(
+        `/api/auth/${mode}`,
+        jsonOptions("POST", body),
       );
-      setSelected({ organization: result.organization, source: session.data });
+      setOverride({ source: session.data, data: result });
       session.retry();
       channel.current?.postMessage("changed");
-    } catch (error) {
-      setSelectionError(errorMessage(error));
+      return result;
     } finally {
       setSelecting(false);
     }
   }
-  const organization =
-    (selected?.source === session.data ? selected?.organization : null) ??
-    session.data?.organizations.find(
-      (item) => item.id === session.data?.organizationId,
-    ) ??
-    null;
+  async function logout() {
+    setSelecting(true);
+    try {
+      await apiRequest("/api/auth/logout", jsonOptions("POST", {}));
+      setOverride({ source: session.data, data: null });
+      session.retry();
+      channel.current?.postMessage("changed");
+    } finally {
+      setSelecting(false);
+    }
+  }
   return {
     ...session,
+    user,
     organization,
     organizationId: organization?.id ?? null,
     role: organization?.role ?? null,
-    organizations: session.data?.organizations ?? [],
-    select,
+    suppliers: suppliers.data?.items ?? [],
+    authenticate,
+    logout,
     selecting,
-    selectionError,
   };
 }
 const SessionContext = createContext<ReturnType<typeof useSessionState> | null>(
@@ -108,7 +124,7 @@ export function WorkspaceGate({
   children: ReactNode;
 }) {
   const session = useOrganizationSession();
-  if ((session.loading && !session.organization) || session.selecting)
+  if ((session.loading && !session.user) || session.selecting)
     return <output className="empty-panel">Loading workspace…</output>;
   if (session.error)
     return (
@@ -123,17 +139,23 @@ export function WorkspaceGate({
         </button>
       </div>
     );
-  if (!session.organizationId)
+  if (!session.user)
     return (
-      <div className="empty-panel">
-        <h1>Choose your workspace.</h1>
+      <div className="empty-panel signed-out">
+        <p className="eyebrow">Material Exchange</p>
+        <h1>Sign in to your workspace.</h1>
         <p>
-          Use your consumer account to source materials, or your producer
-          account to manage supply.
+          Source materials as a Consumer, or manage your supply as a Producer.
+          Your account keeps your organization's activity private.
         </p>
-        <Link className="primary-button" href="/account">
-          Choose account
-        </Link>
+        <div className="button-row">
+          <Link className="primary-button" href="/login">
+            Sign in
+          </Link>
+          <Link className="secondary-button" href="/signup">
+            Create an account
+          </Link>
+        </div>
       </div>
     );
   if (session.role !== requiredRole)
@@ -145,9 +167,9 @@ export function WorkspaceGate({
             : "Consumer workspace"}
         </h2>
         <p>
-          Your active account is a{" "}
-          {session.role === "PRODUCER" ? "producer" : "consumer"}. Its tools are
-          available in its own workspace.
+          Your account belongs to a{" "}
+          {session.role === "PRODUCER" ? "producer" : "consumer"} organization.
+          Its tools are available in its own workspace.
         </p>
         <Link
           className="primary-button"
@@ -157,71 +179,112 @@ export function WorkspaceGate({
         </Link>
       </div>
     );
-  return <Fragment key={session.organizationId}>{children}</Fragment>;
+  return (
+    <Fragment key={`${session.user.id}:${session.organizationId}`}>
+      {children}
+    </Fragment>
+  );
 }
 export function AccountPage() {
   const session = useOrganizationSession();
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  if (session.loading && !session.user)
+    return <output className="empty-panel">Loading account…</output>;
+  if (session.error)
+    return (
+      <div className="empty-panel">
+        <p role="alert">{session.error}</p>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={session.retry}
+        >
+          Retry
+        </button>
+      </div>
+    );
   return (
     <section className="account-page">
-      <p className="eyebrow">Account & workspace</p>
+      <p className="eyebrow">My account</p>
       <h1>
-        Work on your side
-        <br />
-        of the exchange.
+        {session.user
+          ? "Your organization account."
+          : "Your workspace starts here."}
       </h1>
-      <p className="hero-copy">
-        Each organization has one role. Consumers source and order materials.
-        Producers manage their own inventory and quote incoming requests.
-      </p>
-      <div className="role-grid">
-        {(["CONSUMER", "PRODUCER"] as const).map((role) => (
-          <section className="panel account-role" key={role}>
-            <p className="eyebrow">
-              {role === "PRODUCER" ? "Supply materials" : "Source materials"}
+      {session.user && session.organization ? (
+        <div className="panel account-details">
+          <dl className="detail-facts">
+            <div>
+              <dt>Name</dt>
+              <dd>{session.user.fullName}</dd>
+            </div>
+            <div>
+              <dt>Email</dt>
+              <dd>{session.user.email}</dd>
+            </div>
+            <div>
+              <dt>Organization</dt>
+              <dd>{session.organization.name}</dd>
+            </div>
+            <div>
+              <dt>Role</dt>
+              <dd>{session.role === "PRODUCER" ? "Producer" : "Consumer"}</dd>
+            </div>
+          </dl>
+          <p className="muted">
+            Your organization and role are linked to your account. Sign out
+            before using another account.
+          </p>
+          <div className="button-row">
+            <Link
+              className="primary-button"
+              href={session.role === "PRODUCER" ? "/producer" : "/"}
+            >
+              Open workspace
+            </Link>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={session.selecting}
+              onClick={() => {
+                setError(null);
+                void session.logout().then(
+                  () => router.replace("/login"),
+                  (failure) =>
+                    setError(
+                      failure instanceof Error
+                        ? failure.message
+                        : "Sign out failed. Try again.",
+                    ),
+                );
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+          {error ? (
+            <p className="inline-error" role="alert">
+              {error}
             </p>
-            <h2>{role === "PRODUCER" ? "Producer" : "Consumer"}</h2>
-            <p className="muted">
-              {role === "PRODUCER"
-                ? "Publish batches, manage stock, and issue quotations to buyers."
-                : "Discover available materials, reserve quantities, and manage your orders."}
-            </p>
-            {session.organizations
-              .filter((item) => item.role === role)
-              .map((item) => (
-                <button
-                  type="button"
-                  className="account-choice"
-                  key={item.id}
-                  disabled={session.selecting}
-                  aria-pressed={session.organizationId === item.id}
-                  onClick={() => void session.select(item.id)}
-                >
-                  <span>{item.name}</span>
-                  <span className="field-hint">
-                    {session.organizationId === item.id
-                      ? "Selected"
-                      : "Select account"}
-                  </span>
-                </button>
-              ))}
-          </section>
-        ))}
-      </div>
-      {session.loading ? <output>Loading accounts…</output> : null}
-      {session.error || session.selectionError ? (
-        <p role="alert" className="inline-error">
-          {session.error ?? session.selectionError}
-        </p>
-      ) : null}
-      {session.organizationId ? (
-        <Link
-          className="primary-button"
-          href={session.role === "PRODUCER" ? "/producer" : "/"}
-        >
-          Continue to {session.role === "PRODUCER" ? "producer" : "consumer"}{" "}
-          workspace
-        </Link>
-      ) : null}
+          ) : null}
+        </div>
+      ) : (
+        <div className="empty-panel">
+          <p>
+            Sign in to access your organization, or create a new Consumer or
+            Producer organization.
+          </p>
+          <div className="button-row">
+            <Link className="primary-button" href="/login">
+              Sign in
+            </Link>
+            <Link className="secondary-button" href="/signup">
+              Create an account
+            </Link>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

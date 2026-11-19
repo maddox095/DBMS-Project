@@ -52,10 +52,7 @@ export async function lockBatch(connection: PoolConnection, id: string) {
   return rows[0]?.supplierOrgId;
 }
 
-export async function getBatch(
-  id: string,
-  db: Pool | PoolConnection = mysqlPool(),
-) {
+export async function getBatch(id: string, db: Pool | PoolConnection) {
   const [rows] = await db.execute<BatchRow[]>(
     `${batchSelect} WHERE b.id = CAST(? AS SIGNED)`,
     [id],
@@ -88,10 +85,12 @@ export async function listBatches(params: URLSearchParams, ownerId?: string) {
     conditions.push("b.id > CAST(? AS SIGNED)");
     values.push(readId(afterId, "afterId"));
   }
-  const [rows] = await mysqlPool().execute<BatchRow[]>(
-    `${batchSelect} WHERE ${conditions.join(" AND ")} ORDER BY b.id LIMIT ?`,
-    [...values, String(limit + 1)],
-  );
+  const [rows] = await mysqlPool(ownerId ? "PRODUCER" : "CONSUMER").execute<
+    BatchRow[]
+  >(`${batchSelect} WHERE ${conditions.join(" AND ")} ORDER BY b.id LIMIT ?`, [
+    ...values,
+    String(limit + 1),
+  ]);
   return {
     items: rows.slice(0, limit).map(batchFromRow),
     nextAfterId: rows.length > limit ? rows[limit - 1].batchId : null,
@@ -139,7 +138,7 @@ export async function publishBatch(request: Request, supplierOrgId: string) {
   const description = readDescription(body.description);
   const location = readText(body.location, "location", 160);
   const totalQuantity = readQuantity(body.totalQuantity, "totalQuantity");
-  return mysqlTransaction(async (connection) => {
+  return mysqlTransaction("PRODUCER", async (connection) => {
     try {
       await connection.execute(
         `INSERT INTO batches (supplier_org_id, material_id, batch_code, description, location, total_quantity)
@@ -206,7 +205,7 @@ export async function editBatch(
     throw invalidInput("status must be OPEN or CLOSED.");
   }
 
-  return mysqlTransaction(async (connection) => {
+  return mysqlTransaction("PRODUCER", async (connection) => {
     const owner = await lockBatch(connection, id);
     if (!owner) throw batchNotFound();
     if (owner !== supplierOrgId) {

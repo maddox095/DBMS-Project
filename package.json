@@ -13,7 +13,10 @@
     "typecheck": "next typegen && tsc --noEmit",
     "worker": "node --env-file-if-exists=.env worker/index.mjs",
     "rebuild-search": "node --env-file-if-exists=.env worker/rebuild.mjs",
-    "test:integration": "node tests/exchange.integration.cjs"
+    "test:integration": "node --env-file-if-exists=.env tests/exchange.integration.cjs",
+    "test:database": "node --env-file-if-exists=.env tests/database.integration.mjs",
+    "account:create": "node --env-file-if-exists=.env scripts/create-account.mjs",
+    "test:auth": "node --env-file-if-exists=.env tests/auth.integration.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.2",

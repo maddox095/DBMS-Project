@@ -4,29 +4,32 @@ This walkthrough follows a batch from publication to two recipients. The demo us
 
 ## Start the application
 
-Use Node.js 22 or later, npm, and Docker Compose. Run the commands from the repository root. Copy the example configuration once and choose free database ports in `.env`.
+Use Docker Compose from the repository root. Copy the example configuration once and choose free app and database ports in `.env`.
 
 ```powershell
 Copy-Item .env.example .env
-npm ci
-docker compose up -d
+docker compose up --build --detach --wait
 docker compose ps
-npm run build
-npm start
 ```
 
-In another terminal, start `npm run worker`. The first indexing event downloads the pinned MiniLM model from Hugging Face. Open `http://localhost:3000`.
+Open `http://localhost:3000`. The first index event and semantic search download the pinned MiniLM model.
 
-Fresh volumes load the schemas and MySQL seed automatically. For existing volumes, follow the initialization instructions in the README before running the walkthrough. [Database setup](../README.md#start-the-local-databases)
+Fresh volumes load both schemas, the MySQL seed, and database roles automatically. Follow the upgrade instructions for existing volumes. [Database setup](../README.md#upgrade-existing-database-volumes)
+
+## Create protected rehearsal accounts
+
+The seeded organizations have no default credentials. With host Node.js 22 or later and `npm ci` complete, use the trusted local `npm run account:create` command documented in the README to create a user for organization 1 (Producer) and organizations 2 and 3 (Consumers). Choose private passwords interactively. Alternatively, sign up with new, distinct organization names and substitute them throughout this walkthrough.
+
+Each change of organization below means **Sign out**, then **Sign in** with that organization's own user email and password. The account page does not allow organization switching or claiming seeded records.
 
 ## Follow one batch through an exchange
 
-1. Open **Change account**, select **Deccan Thermal Works** under **Producer**, and continue to its workspace. Open **Publish batch**, select **Fly ash (kg)**, and enter batch code `FLY-001`, location `Bengaluru`, total quantity `100`, and description `Dry fly ash suitable for cement blending.`. Publish the batch and retain its detail URL.
-2. Open **Change account**, select **Bengaluru Cement Lab** under **Consumer**, continue to discovery, search for `fly ash for cement blending`, and open `FLY-001`. If the worker is still downloading the model, submit the search again when indexing finishes.
-3. Reserve `30` kg. Complete the contact and delivery form and choose **Request quotation**. Use a fictional email at `example.com` for rehearsal data. Switch account to **Deccan Thermal Works** and open **Incoming requests**. Issue the quotation with unit price, freight, tax, a future validity date, and payment/delivery terms. Switch back to **Bengaluru Cement Lab**, review the total, and choose **Accept quotation & confirm order**. Current availability is `70.000 kg`.
-4. Switch account to **Kaveri Materials Cooperative** and reopen the consumer batch URL. Reserve `20` kg, add delivery details, then repeat the supplier quotation and buyer confirmation steps. This organization sees its own order.
-5. Switch to **Deccan Thermal Works** and open **Incoming requests**. The history shows both recipients and their completed orders. The overview shows `50.000 kg` available.
-6. To demonstrate releasing a hold, choose **Bengaluru Cement Lab**, reserve `5` kg, and cancel that reservation. Availability returns to `50.000 kg`. An attempted reservation of `80` kg displays the availability conflict.
+1. Sign in as the provisioned **Deccan Thermal Works** Producer user. Open **Publish batch**, select **Fly ash (kg)**, and enter batch code `FLY-001`, location `Bengaluru`, total quantity `100`, and description `Dry fly ash suitable for cement blending.`. Publish the batch and retain its detail URL.
+2. Sign out and sign in as the **Bengaluru Cement Lab** Consumer user, continue to discovery, search for `fly ash for cement blending`, and open `FLY-001`. If the worker is still downloading the model, submit the search again when indexing finishes.
+3. Reserve `30` kg. Complete the contact and delivery form and choose **Request quotation**. Use a fictional email at `example.com` for rehearsal data. Sign out and sign in as **Deccan Thermal Works** and open **Incoming requests**. Issue the quotation with unit price, freight, tax, a future validity date, and payment/delivery terms. Sign out and sign in as **Bengaluru Cement Lab**, review the total, and choose **Accept quotation & confirm order**. Current availability is `70.000 kg`.
+4. Sign out and sign in as **Kaveri Materials Cooperative** and reopen the consumer batch URL. Reserve `20` kg, add delivery details, then repeat the supplier quotation and buyer confirmation steps. This organization sees its own order.
+5. Sign out and sign in as **Deccan Thermal Works** and open **Incoming requests**. The history shows both recipients and their completed orders. The overview shows `50.000 kg` available.
+6. To demonstrate releasing a hold, sign in as **Bengaluru Cement Lab**, reserve `5` kg, and cancel that reservation. Availability returns to `50.000 kg`. An attempted reservation of `80` kg displays the availability conflict.
 7. Return to the supplier and change the location to `Mysuru`. Save the batch, then refresh discovery after the worker processes the change.
 
 Use a different batch code for a repeated walkthrough in the same database. A supplier's batch code identifies one source batch.
@@ -38,7 +41,7 @@ The ER diagram and full column and API contracts are in the design document. [ER
 - MySQL stores organizations, material classifications, batches, reservations, orders, and the outbox. An order references one reservation, which identifies its batch, recipient, and quantity.
 - Quantities use fixed decimal precision. Availability subtracts active and converted reservations from a batch total. A cancelled hold releases its quantity, and conversion preserves the quantity already held.
 - Writers lock the batch before checking quantities. The reservation, batch revision, and outbox change commit together. Trace reads use a consistent snapshot so the reported quantities and exchange history agree.
-- PostgreSQL stores a derived snapshot per batch and a 384-dimensional vector. The worker and search API use the same pinned model and input settings. The revision guard prevents an older event from overwriting a newer snapshot.
+- PostgreSQL stores a derived snapshot and a 384-dimensional vector for each open batch. Closing the batch removes its vector and records the revision to protect against stale events.
 
 ## Inspect the data
 
@@ -102,7 +105,15 @@ LIMIT 20;
 
 ## Rebuild and resume
 
-Stop the web app and worker, keep the databases running, and run `npm run rebuild-search`. Restart the web app and worker after it completes. The search projection is reconstructed from MySQL, including current availability and closed batch revisions.
+Pause the app and worker with `docker compose stop app worker`, run `docker compose run --rm worker node worker/rebuild.mjs`, then resume with `docker compose up -d`. The rebuild uses MySQL to restore open vectors and closed-batch revision markers.
+
+## Rubric demonstration
+
+1. In the MySQL schema administrator session, run `source /opt/exchange-sql/catalog_dml.sql` to show insert, select, update, and delete using a disposable catalog row.
+2. Run `source /opt/exchange-sql/weekly_confirmations.sql` after confirming an order. The recursive CTE generates seven calendar dates. The left join includes days with zero orders. Run `SELECT id, allocated_batch_quantity(id) AS allocated_kg FROM batches WHERE batch_code = 'FLY-001';` to show the stored function against the exchange data.
+3. Show `SHOW TRIGGERS;` in MySQL. The batch triggers validate the supplier role, prevent reopening, and reject reducing stock below allocated quantity. The reservation triggers validate the consumer role and prevent changes to terminal states. Confirming a quotation in the app runs `confirm_recipient_order`. Issuing one runs `record_supplier_quote`.
+4. Connect with `docker compose exec mysql mysql -u exchange_consumer -p byproduct_exchange` using `MYSQL_CONSUMER_PASSWORD`. Show `SELECT CURRENT_ROLE();` and execute `UPDATE batches SET status = 'CLOSED' WHERE 1 = 0;`. MySQL rejects the statement at the column permission check. A producer connection can issue quotations but MySQL denies its attempt to call `confirm_recipient_order`. See the [permission rules](authentication.md#mysql-authorization) for the account matrix.
+5. Before closing the batch, record its ID and query `SELECT batch_id, revision, vector_dims(embedding) FROM batch_search WHERE batch_id = YOUR_BATCH_ID;`. Edit the batch and wait for the revision to increase. Close it as the producer and wait for the worker. The same query returns zero rows. `SELECT batch_id, revision FROM batch_search_removals WHERE batch_id = YOUR_BATCH_ID;` shows the deletion revision. The producer's MySQL trace still shows the confirmed exchange.
 
 ## Verification record
 
@@ -127,3 +138,15 @@ The discovery screen now shows a small greyscale caption with exact eligible/mat
 Migration `003_order_fulfillment.sql` adds persisted contact/delivery snapshots and supplier quotations. The revised walkthrough above replaces the earlier one-click order conversion. The original verification record describes the initial project; the update was additionally verified with live MySQL/PostgreSQL HTTP checks for search statistics, threshold validation, delivery validation/persistence, permission scope, exact quote totals, concurrent issue and confirmation replay.
 
 Roles are fixed per account. Verify that consumers have no publish/edit navigation, producers have no discovery/reserve/order tools, and direct visits to the opposite workspace show a role gate. The integration test sends forbidden API requests directly and checks that self-reservations, cross-role writes, and stale-account headers fail.
+
+### Compose and authorization verification
+
+On 19 November 2026, the app and worker built and ran with MySQL 8.4.11 and PostgreSQL 17 with pgvector in an isolated Compose project.
+
+| Check | Observed result |
+| --- | --- |
+| Authentication suite | Signup, password login, logout, session rotation and expiry, cross-origin rejection, and role isolation passed. |
+| Exchange suite | Both roles signed in. The producer published a batch, and a consumer found it, reserved stock, requested a quotation, confirmed it, and cancelled a separate hold. The vector was created and updated. Closing removed it, rejected stale and equal revisions, and preserved the confirmed exchange in the trace. |
+| MySQL suite | Each runtime connection activated its assigned role. MySQL denied cross-role statements, and the routine and trigger checks passed. The recursive report returned seven consecutive dates. |
+| Database scripts | The catalog DML demo returned zero rows after the delete. The pgvector smoke test passed, and reapplying the upgrade retained the deletion revision for a legacy closed batch. The documented Compose rebuild restored the vectors and removal markers with the matching MySQL revisions. |
+| Chrome walkthrough | The browser completed signup, logout, password login, publishing, search, a reservation, a delivery request, a quotation, order confirmation, viewing the producer trace, and closing the batch. |

@@ -1,9 +1,9 @@
 import { batchSelect } from "../src/server/batch-query.mjs";
 import { mysqlPool } from "../src/server/mysql-pool.mjs";
 import { postgresPool } from "../src/server/postgres.mjs";
-import { upsertBatchSearch } from "./indexing.mjs";
+import { writeBatchProjection } from "./indexing.mjs";
 
-const mysql = mysqlPool();
+const mysql = mysqlPool("worker");
 const postgres = postgresPool();
 let client;
 
@@ -12,7 +12,7 @@ try {
   client = await postgres.connect();
   await client.query("BEGIN");
   try {
-    await client.query("TRUNCATE TABLE batch_search");
+    await client.query("TRUNCATE TABLE batch_search, batch_search_removals");
     for (const row of rows) {
       const {
         totalQuantity: _total,
@@ -22,7 +22,7 @@ try {
         unit,
         ...batch
       } = row;
-      await upsertBatchSearch(client, {
+      await writeBatchProjection(client, {
         ...batch,
         material: { id: materialId, name: materialName, category, unit },
       });

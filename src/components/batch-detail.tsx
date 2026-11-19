@@ -69,9 +69,8 @@ export function BatchDetail({
           <p className="supplier-name">
             Supplied by{" "}
             <strong>
-              {session.organizations.find(
-                (item) => item.id === batch.supplierOrgId,
-              )?.name ?? `Organization ${batch.supplierOrgId}`}
+              {session.suppliers.find((item) => item.id === batch.supplierOrgId)
+                ?.name ?? `Organization ${batch.supplierOrgId}`}
             </strong>
           </p>
           <p>{batch.description || "Description pending."}</p>

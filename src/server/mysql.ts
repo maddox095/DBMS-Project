@@ -3,10 +3,11 @@ import { mysqlPool } from "./mysql-pool.mjs";
 export { mysqlPool };
 
 export async function mysqlTransaction<T>(
+  access: "auth" | "PRODUCER" | "CONSUMER",
   work: (connection: PoolConnection) => Promise<T>,
   mode: "write" | "snapshot" = "write",
 ): Promise<T> {
-  const connection = await mysqlPool().getConnection();
+  const connection = await mysqlPool(access).getConnection();
   try {
     await connection.query(
       mode === "snapshot"

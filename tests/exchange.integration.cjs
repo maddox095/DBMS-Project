@@ -1,15 +1,75 @@
 // Run against the local application with its worker and isolated databases running.
 // Creates one verification batch, retains its audit records, and closes it afterward.
 const assert = require("node:assert/strict");
-const base = "http://127.0.0.1:3000/api";
+const origin = process.env.TEST_APP_URL ?? "http://127.0.0.1:3000";
+const base = `${origin}/api`;
+const sessionCookie = (response) =>
+  response.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith("exchange_session="))
+    .split(";")[0];
+
+async function assertVectorRemoval(batch, closed) {
+  const { postgresPool } = await import("../src/server/postgres.mjs");
+  const { writeBatchProjection } = await import("../worker/indexing.mjs");
+  const postgres = postgresPool();
+  const projection = `SELECT
+    (SELECT revision FROM batch_search WHERE batch_id = $1) AS vector_revision,
+    (SELECT revision FROM batch_search_removals WHERE batch_id = $1) AS removal_revision`;
+  try {
+    const deadline = Date.now() + 60000;
+    for (;;) {
+      const {
+        rows: [row],
+      } = await postgres.query(projection, [batch.batchId]);
+      if (row.removal_revision === closed.revision) {
+        assert.equal(row.vector_revision, null);
+        break;
+      }
+      assert(
+        Date.now() < deadline,
+        "Worker did not remove the closed batch vector.",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const connection = await postgres.connect();
+    try {
+      await connection.query("BEGIN");
+      await writeBatchProjection(connection, batch);
+      await writeBatchProjection(connection, {
+        ...batch,
+        revision: closed.revision,
+      });
+      const {
+        rows: [row],
+      } = await connection.query(projection, [batch.batchId]);
+      assert.deepEqual(row, {
+        vector_revision: null,
+        removal_revision: closed.revision,
+      });
+    } finally {
+      await connection.query("ROLLBACK");
+      connection.release();
+    }
+  } finally {
+    await postgres.end();
+  }
+}
+
 (async () => {
   const sessions = {};
+  const orgIds = {};
+  const run = crypto.randomUUID();
   async function request(path, org, body, expected = 200, extra = {}) {
     const response = await fetch(base + path, {
       method: body === undefined ? "GET" : "POST",
       headers: {
-        ...(org ? { Cookie: sessions[org], "X-Organization-Id": org } : {}),
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(org
+          ? { Cookie: sessions[org], "X-Organization-Id": orgIds[org] }
+          : {}),
+        ...(body !== undefined
+          ? { "Content-Type": "application/json", Origin: origin }
+          : {}),
         ...extra,
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -19,13 +79,32 @@ const base = "http://127.0.0.1:3000/api";
     return data;
   }
   for (const id of ["1", "2", "3"]) {
-    const r = await fetch(`${base}/demo-session`, {
+    const email = `exchange-${run}-${id}@example.com`;
+    const password = `${crypto.randomUUID()}!aA7`;
+    const r = await fetch(`${base}/auth/signup`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ organizationId: id }),
+      headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify({
+        fullName: "Exchange Verification",
+        email,
+        password,
+        companyName: `Exchange Verification ${run} ${id}`,
+        role: id === "1" ? "PRODUCER" : "CONSUMER",
+      }),
     });
-    assert.equal(r.status, 200);
-    sessions[id] = r.headers.get("set-cookie").split(";")[0];
+    assert.equal(r.status, 201);
+    orgIds[id] = (await r.json()).organization.id;
+    sessions[id] = sessionCookie(r);
+    await request("/auth/logout", id, {});
+    await request("/orders", id, undefined, 401);
+    const login = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify({ email, password }),
+    });
+    assert.equal(login.status, 200);
+    assert.equal((await login.json()).organization.id, orgIds[id]);
+    sessions[id] = sessionCookie(login);
   }
   const { items: materials } = await request("/materials", "1");
   const batch = await request(
@@ -40,18 +119,14 @@ const base = "http://127.0.0.1:3000/api";
     },
     201,
   );
+  let closed;
   try {
-    const selected = await request("/demo-session", "1");
-    assert.equal(
-      selected.organizations.find((item) => item.id === "1").role,
-      "PRODUCER",
-    );
-    assert.equal(
-      selected.organizations.find((item) => item.id === "2").role,
-      "CONSUMER",
-    );
+    const selected = await request("/auth/session", "1");
+    assert.equal(selected.organization.role, "PRODUCER");
+    const consumerSession = await request("/auth/session", "2");
+    assert.equal(consumerSession.organization.role, "CONSUMER");
     const own = await request("/batches?limit=50", "1");
-    assert(own.items.every((item) => item.supplierOrgId === "1"));
+    assert(own.items.every((item) => item.supplierOrgId === orgIds["1"]));
     assert(own.items.some((item) => item.batchId === batch.batchId));
     await request(
       "/batches",
@@ -77,7 +152,10 @@ const base = "http://127.0.0.1:3000/api";
       "2",
       { quantity: "1.000" },
       409,
-      { "Idempotency-Key": crypto.randomUUID(), "X-Organization-Id": "3" },
+      {
+        "Idempotency-Key": crypto.randomUUID(),
+        "X-Organization-Id": orgIds["3"],
+      },
     );
     await request("/search?q=cement", "1", undefined, 403);
     const until = Date.now() + 60000;
@@ -188,7 +266,7 @@ const base = "http://127.0.0.1:3000/api";
           method: "POST",
           headers: {
             Cookie: sessions["1"],
-            "X-Organization-Id": "1",
+            "X-Organization-Id": orgIds["1"],
             "Content-Type": "application/json",
           },
           body: JSON.stringify(quote),
@@ -200,7 +278,7 @@ const base = "http://127.0.0.1:3000/api";
     const buyerDashboard = await request("/orders", "2");
     assert(
       buyerDashboard.items.every(
-        (item) => item.reservation.recipientOrgId === "2",
+        (item) => item.reservation.recipientOrgId === orgIds["2"],
       ),
     );
     assert(
@@ -232,21 +310,62 @@ const base = "http://127.0.0.1:3000/api";
     trace = await request(`/batches/${batch.batchId}/trace`, "1");
     assert.equal(trace.orders[0].fulfillment.status, "CONFIRMED");
     assert.equal(trace.batch.availableQuantity, "4.321");
-    console.log(
-      "PASS: fixed roles; producer-only publishing; consumer-only sourcing; own-batch reservation rejection; stale-account guard; scoped dashboards; search counts/timing/limit/threshold validation; delivery validation and persistence; scoped contact visibility; quotation authorization/rounding/concurrent issue; concurrent confirmation replay.",
+    const hold = await request(
+      `/batches/${batch.batchId}/reservations`,
+      "2",
+      { quantity: "0.500" },
+      201,
+      { "Idempotency-Key": crypto.randomUUID() },
     );
+    const updateDeadline = Date.now() + 60000;
+    for (;;) {
+      const results = await request(
+        "/search?q=cement&minSimilarity=0&limit=50",
+        "2",
+      );
+      const indexed = results.items.find(
+        (item) => item.batchId === batch.batchId,
+      );
+      if (indexed?.availableQuantity === "3.821") break;
+      assert(
+        Date.now() < updateDeadline,
+        "Worker did not update the vector snapshot after the hold.",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await request(`/reservations/${hold.reservationId}/cancel`, "2", {});
+    const released = await request(`/batches/${batch.batchId}`, "1");
+    assert.equal(released.availableQuantity, "4.321");
   } finally {
     const r = await fetch(`${base}/batches/${batch.batchId}`, {
       method: "PATCH",
       headers: {
         Cookie: sessions["1"],
-        "X-Organization-Id": "1",
+        "X-Organization-Id": orgIds["1"],
         "Content-Type": "application/json",
+        Origin: origin,
       },
       body: JSON.stringify({ status: "CLOSED" }),
     });
     assert.equal(r.status, 200);
+    closed = await r.json();
   }
+  assert.equal(closed.status, "CLOSED");
+  await assertVectorRemoval(batch, closed);
+  const closedSearch = await request(
+    "/search?q=cement&minSimilarity=0&limit=50",
+    "2",
+  );
+  assert(!closedSearch.items.some((item) => item.batchId === batch.batchId));
+  const closedTrace = await request(`/batches/${batch.batchId}/trace`, "1");
+  assert.equal(closedTrace.orders[0].fulfillment.status, "CONFIRMED");
+  for (const id of ["1", "2", "3"]) {
+    await request("/auth/logout", id, {});
+    await request("/orders", id, undefined, 401);
+  }
+  console.log(
+    "PASS: signup, logout and password login; role and ownership scope; publish, search, reserve, cancel, delivery request, concurrent quote and confirmation; trace retained after close; vector created, updated, deleted and protected against stale/equal revisions.",
+  );
 })().catch((e) => {
   console.error(e);
   process.exitCode = 1;

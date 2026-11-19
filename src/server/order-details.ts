@@ -180,68 +180,69 @@ export function changeOrder(
   organizationId: string,
   body: Record<string, unknown> | null,
 ) {
-  return mysqlTransaction(async (connection) => {
-    const [rows] = await connection.execute<RowDataPacket[]>(
-      `SELECT r.batch_id AS batchId,
+  return mysqlTransaction(
+    body ? "PRODUCER" : "CONSUMER",
+    async (connection) => {
+      const [rows] = await connection.execute<RowDataPacket[]>(
+        `SELECT r.batch_id AS batchId,
       r.recipient_org_id AS recipientOrgId, r.quantity FROM exchange_orders o
       JOIN reservations r ON r.id = o.reservation_id WHERE o.id = ?`,
-      [orderId],
-    );
-    const row = rows[0];
-    if (!row) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found.");
-    const supplierOrgId = await lockBatch(connection, row.batchId);
-    if (organizationId !== (body ? supplierOrgId : row.recipientOrgId))
-      throw new ApiError(
-        403,
-        "ORDER_FORBIDDEN",
-        body
-          ? "Only the supplier can issue a quotation."
-          : "Only the recipient can confirm this order.",
-      );
-    const details = await orderDetails(connection, orderId);
-    if (!details)
-      throw new ApiError(
-        409,
-        "DELIVERY_REQUIRED",
-        "This earlier order has no delivery request.",
-      );
-    if (body) {
-      if (details.status !== "QUOTE_REQUESTED")
-        throw new ApiError(
-          409,
-          "QUOTE_ALREADY_ISSUED",
-          "A quotation has already been issued for this request.",
-        );
-      const quote = readQuotation(body, row.quantity);
-      await connection.execute(
-        `UPDATE order_fulfillments SET status = 'QUOTED',
-        unit_price = ?, freight = ?, tax_percent = ?, subtotal = ?, tax_amount = ?, total = ?,
-        valid_until = ?, terms = ?, quoted_at = CURRENT_TIMESTAMP(6) WHERE order_id = ?`,
-        [...Object.values(quote), orderId],
-      );
-    } else {
-      if (details.status === "CONFIRMED")
-        return orderDetails(connection, orderId);
-      if (details.status !== "QUOTED")
-        throw new ApiError(
-          409,
-          "QUOTE_REQUIRED",
-          "Wait for the supplier's quotation before confirming.",
-        );
-      if (
-        !details.validUntil ||
-        details.validUntil < new Date().toISOString().slice(0, 10)
-      )
-        throw new ApiError(
-          409,
-          "QUOTE_EXPIRED",
-          "This quotation has expired. Contact the supplier.",
-        );
-      await connection.execute(
-        "UPDATE order_fulfillments SET status = 'CONFIRMED', confirmed_at = CURRENT_TIMESTAMP(6) WHERE order_id = ?",
         [orderId],
       );
-    }
-    return orderDetails(connection, orderId);
-  });
+      const row = rows[0];
+      if (!row) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found.");
+      const supplierOrgId = await lockBatch(connection, row.batchId);
+      if (organizationId !== (body ? supplierOrgId : row.recipientOrgId))
+        throw new ApiError(
+          403,
+          "ORDER_FORBIDDEN",
+          body
+            ? "Only the supplier can issue a quotation."
+            : "Only the recipient can confirm this order.",
+        );
+      const details = await orderDetails(connection, orderId);
+      if (!details)
+        throw new ApiError(
+          409,
+          "DELIVERY_REQUIRED",
+          "This earlier order has no delivery request.",
+        );
+      if (body) {
+        if (details.status !== "QUOTE_REQUESTED")
+          throw new ApiError(
+            409,
+            "QUOTE_ALREADY_ISSUED",
+            "A quotation has already been issued for this request.",
+          );
+        const quote = readQuotation(body, row.quantity);
+        await connection.execute(
+          "CALL record_supplier_quote(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [orderId, organizationId, ...Object.values(quote)],
+        );
+      } else {
+        if (details.status === "CONFIRMED")
+          return orderDetails(connection, orderId);
+        if (details.status !== "QUOTED")
+          throw new ApiError(
+            409,
+            "QUOTE_REQUIRED",
+            "Wait for the supplier's quotation before confirming.",
+          );
+        if (
+          !details.validUntil ||
+          details.validUntil < new Date().toISOString().slice(0, 10)
+        )
+          throw new ApiError(
+            409,
+            "QUOTE_EXPIRED",
+            "This quotation has expired. Contact the supplier.",
+          );
+        await connection.execute("CALL confirm_recipient_order(?, ?)", [
+          orderId,
+          organizationId,
+        ]);
+      }
+      return orderDetails(connection, orderId);
+    },
+  );
 }

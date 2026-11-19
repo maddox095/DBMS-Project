@@ -3,7 +3,7 @@ import { mysqlPool } from "../src/server/mysql-pool.mjs";
 import { postgresPool } from "../src/server/postgres.mjs";
 import { processIndexEvents } from "./indexing.mjs";
 
-const mysql = mysqlPool();
+const mysql = mysqlPool("worker");
 const postgres = postgresPool();
 
 const stop = new AbortController();

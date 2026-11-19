@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireOrganizationRole } from "@/server/demo-session";
+import { requireOrganizationRole } from "@/server/auth";
 import { json, readObject, respond } from "@/server/http";
 import { changeOrder, quotationKeys } from "@/server/order-details";
 import { readId } from "@/server/validation";

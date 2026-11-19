@@ -91,6 +91,12 @@ export async function apiRequest<T>(path: string, options?: RequestInit) {
   const response = await fetch(path, options);
   const data = await response.json().catch(() => null);
   if (!response.ok || data === null) {
+    if (
+      response.status === 401 &&
+      typeof window !== "undefined" &&
+      !path.startsWith("/api/auth/")
+    )
+      window.dispatchEvent(new Event("exchange:session-expired"));
     throw new RequestError(
       data?.error?.message ??
         "The service could not complete the request. Try again.",

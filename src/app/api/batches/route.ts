@@ -1,9 +1,6 @@
 import type { NextRequest } from "next/server";
+import { currentOrganization, requireOrganizationRole } from "@/server/auth";
 import { listBatches, publishBatch } from "@/server/batches";
-import {
-  currentOrganization,
-  requireOrganizationRole,
-} from "@/server/demo-session";
 import { json, respond } from "@/server/http";
 
 export function GET(request: NextRequest) {
